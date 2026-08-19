@@ -5,6 +5,8 @@ Run with:
 """
 
 
+# TEST
+
 def main() -> None:
     print("EconomicsProject environment is set up and working!")
 
