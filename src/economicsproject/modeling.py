@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from .dataset import PreparedDataset, TARGET_COLUMN
+from .dataset import PreparedDataset, TARGET_COLUMN, validate_variable_selection
 
 
 @dataclass(frozen=True)
@@ -41,10 +41,13 @@ class FittedModel:
 def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> FittedModel:
     """Fit a logit regression on seasons 1-7 and score it against seasons 8-10.
 
-    ``feature_columns`` must already be real, encoded column names -- run
-    them through ``PreparedDataset.expand()`` first if they might include a
-    category name like "Industry".
+    ``feature_columns`` must be real column names in ``dataset.frame`` --
+    every one-hot category is individually selectable (e.g.
+    "Industry_Travel"), there's no "logical name expands to N dummies" step.
+    This validates them itself (via ``dataset.validate_variable_selection``),
+    so this guard holds even when called directly, outside the API.
     """
+    validate_variable_selection(feature_columns)
     train_df, basic_test_df, _ = dataset.split_by_season()
 
     train_means = train_df[feature_columns].mean().to_dict()

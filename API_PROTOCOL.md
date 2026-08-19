@@ -69,31 +69,49 @@ with one of these status codes:
 
 ## The variable universe
 
-`GET`/`POST` responses that mention usable columns are always drawn from this
-fixed set (`economicsproject.dataset.USABLE_COLUMNS`):
+`GET`/`POST` responses that mention usable columns are always drawn from
+`economicsproject.dataset.USABLE_COLUMNS`, which is two things concatenated:
+
+**Plain numeric columns**, used by their literal header name:
 
 ```
-Episode Number, Pitch Number, Industry, Pitchers Gender, Multiple Entrepreneurs,
-US Viewership, Original Ask Amount, Original Offered Equity, Valuation Requested,
+Episode Number, Pitch Number, Multiple Entrepreneurs, US Viewership,
+Original Ask Amount, Original Offered Equity, Valuation Requested,
 Barbara Corcoran Present, Mark Cuban Present, Lori Greiner Present,
 Robert Herjavec Present, Daymond John Present, Kevin O Leary Present,
 Guest Present, Season Number
 ```
 
-Two of those are categories, not numbers, and get one-hot encoded
-automatically wherever they're used — students just refer to them by their
-plain name (`"Industry"`, `"Pitchers Gender"`), never by dummy-column name:
+**One-hot category values, each individually selectable.** Students pick out
+specific categories — e.g. `"Industry_Travel"` — not the parent field as a
+whole; there's no way to select "Industry" and get every industry at once.
+Naming convention: `<OriginalHeader>_<DiscreteValue>`.
 
-- **Industry** (16 values): Food and Beverage, Lifestyle/Home, Fashion/Beauty,
-  Fitness/Sports/Outdoors, Children/Education, Health/Wellness,
-  Technology/Software, Pet Products, Business Services, Media/Entertainment,
-  Uncertain/Other, Electronics, Automotive, Green/CleanTech, Liquor/Alcohol,
-  Travel
-- **Pitchers Gender** (3 values): Male, Female, Mixed Team
+- **Industry** (16 values → 16 columns `Industry_Food and Beverage`,
+  `Industry_Lifestyle/Home`, ... `Industry_Travel`): Food and Beverage,
+  Lifestyle/Home, Fashion/Beauty, Fitness/Sports/Outdoors,
+  Children/Education, Health/Wellness, Technology/Software, Pet Products,
+  Business Services, Media/Entertainment, Uncertain/Other, Electronics,
+  Automotive, Green/CleanTech, Liquor/Alcohol, Travel
+- **Pitchers Gender** (3 values → 3 columns `Pitchers Gender_Male`,
+  `Pitchers Gender_Female`, `Pitchers Gender_Mixed Team`)
 
-`POST /sessions/{code}/join` echoes both `usable_columns` and `categories` in
-its response so a frontend can build its variable picker without hardcoding
-this list.
+Picking a **subset** of a field's categories (e.g. just `Industry_Travel`
+and `Industry_Automotive`) is fine. Picking **every** category of the same
+field at once is rejected with a `400` — those dummies would sum to 1 for
+every row, exactly duplicating the model's intercept, making the fit
+unsolvable.
+
+`POST /sessions/{code}/join` echoes three things so a frontend can build its
+variable picker without hardcoding any of this:
+- `usable_columns` — the flat list above, i.e. every literal string a
+  student may put in `variables`.
+- `categories` — the same category → values grouping shown above, handy for
+  labeling a group of checkboxes.
+- `dummy_column_category` — the reverse lookup, `{"Industry_Travel":
+  "Industry", ...}`, handy for grouping the flat `usable_columns` list by
+  category without re-deriving the `<Header>_<Value>` naming convention
+  yourself.
 
 ## Data split & scoring
 
@@ -134,8 +152,8 @@ Each score is a `ConfusionMetrics` object:
 ## Model caching
 
 The backend fits a logit model for a given *set* of variables (order and
-duplicates don't matter — `["Industry", "Original Ask Amount"]` and
-`["Original Ask Amount", "Industry", "Industry"]` are the same model) **at
+duplicates don't matter — `["Industry_Travel", "Original Ask Amount"]` and
+`["Original Ask Amount", "Industry_Travel", "Industry_Travel"]` are the same model) **at
 most once per server process**, the first time any student asks for it. Every
 later `explore`/`finalize` call with that same variable set — from the same
 student or a different one — reuses the cached fit instantly instead of
@@ -202,10 +220,16 @@ A student joins a session with their name.
 {
   "student_id": "S1",
   "student_token": "50JH2u0kZBypwz3YiVjidVKEpwPbKqR4",
-  "usable_columns": ["Episode Number", "Pitch Number", "Industry", "..."],
+  "usable_columns": ["Episode Number", "Pitch Number", "...", "Industry_Food and Beverage", "Industry_Travel", "..."],
   "categories": {
     "Industry": ["Food and Beverage", "Lifestyle/Home", "..."],
     "Pitchers Gender": ["Male", "Female", "Mixed Team"]
+  },
+  "dummy_column_category": {
+    "Industry_Food and Beverage": "Industry",
+    "Industry_Travel": "Industry",
+    "Pitchers Gender_Female": "Pitchers Gender",
+    "...": "..."
   }
 }
 ```
@@ -226,15 +250,15 @@ student wants while they experiment.
 
 **Request body:**
 ```json
-{ "variables": ["Industry", "Original Ask Amount"] }
+{ "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"] }
 ```
 
 **Response** `200` (first time, or any time before this student finalizes):
 ```json
 {
   "status": "ok",
-  "variables": ["Industry", "Original Ask Amount"],
-  "equation": "logit(P(Got Deal)) = 0.2392 + 0.1527 * Industry_Lifestyle/Home - ...",
+  "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"],
+  "equation": "logit(P(Got Deal)) = 0.7460 + 0.0903 * Industry_Food and Beverage + 0.3893 * Industry_Travel - 0.0000 * Original Ask Amount",
   "basic_test": { "accuracy": 0.570, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.330, "sample_size": 284 }
 }
 ```
@@ -246,13 +270,16 @@ updates" for why this is a response, not a push):
   "status": "already_submitted",
   "student_id": "S1",
   "full_name": "Ada Lovelace",
-  "variables": ["Industry", "Original Ask Amount"],
+  "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"],
   "equation": "...",
   "basic_test": { "...": "..." },
   "final_test": null,
   "finalized_at": 1787121482.58
 }
 ```
+
+**Errors also include:** `400` if `variables` selects every category of the
+same field at once (see "The variable universe" above).
 
 `final_test` stays `null` until the session is stopped.
 
@@ -297,7 +324,7 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
     {
       "student_id": "S1",
       "full_name": "Ada Lovelace",
-      "variables": ["Industry", "Original Ask Amount"],
+      "variables": ["Industry_Travel", "Original Ask Amount"],
       "equation": "...",
       "basic_test": { "accuracy": 0.570, "...": "..." },
       "final_test": null,

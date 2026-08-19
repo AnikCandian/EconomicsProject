@@ -21,7 +21,13 @@ from fastapi.responses import JSONResponse
 
 from . import schemas
 from .cache import ModelCache
-from .dataset import CATEGORY_VALUES, USABLE_COLUMNS, load_prepared_dataset
+from .dataset import (
+    CATEGORY_VALUES,
+    DUMMY_COLUMN_CATEGORY,
+    USABLE_COLUMNS,
+    load_prepared_dataset,
+    validate_variable_selection,
+)
 from .modeling import ConfusionMetrics
 from .sessions import (
     InvalidHostTokenError,
@@ -87,9 +93,10 @@ def require_professor_key(x_professor_key: str = Header(...)) -> None:
 
 
 def _validate_variables(variables: list[str]) -> None:
-    unusable = sorted(set(variables) - set(USABLE_COLUMNS))
-    if unusable:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Not usable column(s): {unusable}")
+    try:
+        validate_variable_selection(variables)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
 def _metrics_dict(metrics: ConfusionMetrics) -> dict:
@@ -169,6 +176,7 @@ def join_session(code: str, body: schemas.JoinRequest):
         "student_token": student.token,
         "usable_columns": USABLE_COLUMNS,
         "categories": CATEGORY_VALUES,
+        "dummy_column_category": DUMMY_COLUMN_CATEGORY,
     }
 
 

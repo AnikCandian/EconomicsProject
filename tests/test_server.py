@@ -36,11 +36,11 @@ def test_full_game_flow():
 
     student = _join(code)
     token = student["student_token"]
-    assert "Industry" in student["usable_columns"]
+    assert "Industry_Travel" in student["usable_columns"]
 
     explore = client.post(
         f"/sessions/{code}/explore",
-        json={"variables": ["Industry", "Original Ask Amount"]},
+        json={"variables": ["Industry_Travel", "Original Ask Amount"]},
         headers={"X-Student-Token": token},
     )
     assert explore.status_code == 200
@@ -50,7 +50,7 @@ def test_full_game_flow():
 
     finalize = client.post(
         f"/sessions/{code}/finalize",
-        json={"variables": ["Industry", "Original Ask Amount"]},
+        json={"variables": ["Industry_Travel", "Original Ask Amount"]},
         headers={"X-Student-Token": token},
     )
     assert finalize.status_code == 200
@@ -115,7 +115,7 @@ def test_unknown_student_token_is_401():
 
     response = client.post(
         f"/sessions/{code}/explore",
-        json={"variables": ["Industry"]},
+        json={"variables": ["Industry_Travel"]},
         headers={"X-Student-Token": "not-a-real-token"},
     )
     assert response.status_code == 401
