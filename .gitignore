@@ -28,3 +28,6 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Derived data (regenerated on every server start from the raw CSV)
+src/economicsproject/prepared_shark_tank_dataset.csv
