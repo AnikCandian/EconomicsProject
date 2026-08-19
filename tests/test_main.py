@@ -23,8 +23,9 @@ def test_fit_deal_likelihood_regression_trains_on_seasons_1_to_7():
     assert not (set(result["final_test_seasons"]) & TRAIN_SEASONS)
     assert not (set(result["final_test_seasons"]) & BASIC_TEST_SEASONS)
 
-    assert result["equation"].startswith("Likelihood(Got Deal) =")
-    assert result["train_r_squared"] is not None
+    assert result["equation"].startswith("logit(P(Got Deal)) =")
+    assert result["train_pseudo_r_squared"] is not None
+    assert 0 <= result["train_accuracy"] <= 1
 
 
 def test_fit_deal_likelihood_regression_rejects_unknown_column():
