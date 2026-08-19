@@ -24,12 +24,30 @@ def load_dataset(csv_path: Path = DATA_PATH) -> pd.DataFrame:
     return pd.read_csv(csv_path)
 
 
+def detect_category_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
+    """Return the subset of ``columns`` that hold categories (non-numeric values)."""
+    return [c for c in columns if not pd.api.types.is_numeric_dtype(df[c])]
+
+
+def one_hot_encode_categories(df: pd.DataFrame, category_columns: list[str]) -> pd.DataFrame:
+    """One-hot encode each column in ``category_columns``.
+
+    Each category becomes its own 0/1 column (e.g. ``Industry`` becomes
+    ``Industry_Technology/Software``, ``Industry_Food and Beverage``, ...).
+    The first category of each column is dropped to avoid the dummy-variable
+    trap, and the original category column is replaced by its dummies.
+    """
+    return pd.get_dummies(df, columns=category_columns, drop_first=True, dtype=float)
+
+
 def fit_deal_likelihood_regression(feature_columns: list[str], csv_path: Path = DATA_PATH) -> dict:
     """Fit a logit (logistic) regression that estimates the likelihood of getting a deal.
 
     ``feature_columns`` is a list of strings naming the CSV headers to use as
     predictors (e.g. ``["Original Ask Amount", "Original Offered Equity",
-    "Industry"]``). Non-numeric columns are automatically one-hot encoded.
+    "Industry"]``). Any column holding categories (non-numeric values, e.g.
+    ``Industry``) is automatically one-hot encoded via
+    :func:`one_hot_encode_categories`.
 
     The model is trained only on seasons 1-7. Seasons 8-10 are scored as a
     basic test set, and seasons 11 onward are set aside untouched as a final
@@ -48,8 +66,8 @@ def fit_deal_likelihood_regression(feature_columns: list[str], csv_path: Path = 
     df = df[[SEASON_COLUMN] + feature_columns + [TARGET_COLUMN]].copy()
     df = df.dropna(subset=[TARGET_COLUMN])
 
-    categorical_columns = [c for c in feature_columns if not pd.api.types.is_numeric_dtype(df[c])]
-    df = pd.get_dummies(df, columns=categorical_columns, drop_first=True, dtype=float)
+    category_columns = detect_category_columns(df, feature_columns)
+    df = one_hot_encode_categories(df, category_columns)
     encoded_feature_columns = [c for c in df.columns if c not in (SEASON_COLUMN, TARGET_COLUMN)]
 
     train_df = df[df[SEASON_COLUMN].isin(TRAIN_SEASONS)]
