@@ -15,20 +15,20 @@ def test_join_explore_finalize_happy_path(store):
     session = store.create()
     student = session.join("Ada Lovelace")
 
-    fitted, already = session.explore(student.token, ["Industry", "Original Ask Amount"])
+    fitted, already = session.explore(student.token, ["Industry_Travel", "Original Ask Amount"])
     assert already is False
     assert fitted.equation.startswith("logit(P(Got Deal)) =")
 
-    submission, already = session.finalize(student.token, ["Industry", "Original Ask Amount"])
+    submission, already = session.finalize(student.token, ["Industry_Travel", "Original Ask Amount"])
     assert already is False
     assert submission.student_id == student.student_id
-    assert submission.variables == ["Industry", "Original Ask Amount"]
+    assert submission.variables == ["Industry_Travel", "Original Ask Amount"]
 
 
 def test_exploring_after_finalize_reports_already_submitted(store):
     session = store.create()
     student = session.join("Ada Lovelace")
-    session.finalize(student.token, ["Industry"])
+    session.finalize(student.token, ["Industry_Travel"])
 
     fitted, already = session.explore(student.token, ["Original Ask Amount"])
 
@@ -40,7 +40,7 @@ def test_finalize_is_idempotent(store):
     session = store.create()
     student = session.join("Ada Lovelace")
 
-    first, already_first = session.finalize(student.token, ["Industry"])
+    first, already_first = session.finalize(student.token, ["Industry_Travel"])
     second, already_second = session.finalize(student.token, ["Original Ask Amount"])
 
     assert already_first is False
@@ -51,7 +51,7 @@ def test_finalize_is_idempotent(store):
 def test_unknown_token_is_rejected(store):
     session = store.create()
     with pytest.raises(UnknownStudentError):
-        session.explore("not-a-real-token", ["Industry"])
+        session.explore("not-a-real-token", ["Industry_Travel"])
 
 
 def test_explore_after_close_is_rejected(store):
@@ -60,14 +60,14 @@ def test_explore_after_close_is_rejected(store):
     session.close()
 
     with pytest.raises(SessionClosedError):
-        session.explore(student.token, ["Industry"])
+        session.explore(student.token, ["Industry_Travel"])
 
 
 def test_close_scores_final_test_and_builds_two_leaderboards(store):
     session = store.create()
     a = session.join("Ada Lovelace")
     b = session.join("Grace Hopper")
-    session.finalize(a.token, ["Industry"])
+    session.finalize(a.token, ["Industry_Travel"])
     session.finalize(b.token, ["Original Ask Amount", "Original Offered Equity"])
 
     results = session.close()

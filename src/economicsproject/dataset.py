@@ -2,10 +2,11 @@
 
 The raw CSV (``Shark Tank US dataset.csv``) is never modified. On first use
 this module derives a second, reformatted CSV next to it -- containing only
-the usable columns, with every category column already one-hot encoded --
-writes it to disk, and loads the in-memory dataset from THAT file. Keeping
-the derived file on disk makes it easy to eyeball or debug exactly what the
-model is trained on, without ever touching the source data.
+the usable columns, with every category already one-hot encoded into its own
+individually-selectable column -- writes it to disk, and loads the in-memory
+dataset from THAT file. Keeping the derived file on disk makes it easy to
+eyeball or debug exactly what the model is trained on, without ever touching
+the source data.
 """
 
 from __future__ import annotations
@@ -28,13 +29,10 @@ TARGET_COLUMN = "Got Deal"
 TRAIN_SEASONS = set(range(1, 8))
 BASIC_TEST_SEASONS = set(range(8, 11))
 
-# The columns this project is willing to model with. Anything else (free
-# text, near-empty columns, outcome columns, etc.) is off-limits.
-USABLE_COLUMNS = [
+# Plain numeric columns students can pick as variables.
+NUMERIC_USABLE_COLUMNS = [
     "Episode Number",
     "Pitch Number",
-    "Industry",
-    "Pitchers Gender",
     "Multiple Entrepreneurs",
     "US Viewership",
     "Original Ask Amount",
@@ -50,11 +48,10 @@ USABLE_COLUMNS = [
     "Season Number",
 ]
 
-# Of the usable columns, these two hold categories rather than numbers, so
-# they need one-hot encoding. Each list is the column's full, fixed set of
-# known values (verified against the raw CSV) -- fixed so the resulting
-# dummy columns are always the same regardless of which rows/seasons happen
-# to be in a given slice of data.
+# Category columns and their full, fixed vocabulary (verified against the
+# raw CSV). Each value becomes its own individually-selectable dummy column
+# -- students pick out specific categories (e.g. "Industry_Travel"), not the
+# whole field toggled on at once. Naming convention: "<Header>_<Value>".
 CATEGORY_VALUES: dict[str, list[str]] = {
     "Industry": [
         "Food and Beverage",
@@ -78,54 +75,85 @@ CATEGORY_VALUES: dict[str, list[str]] = {
 }
 
 
-def _dummy_column_names(category: str, categories: list[str]) -> list[str]:
-    """Column names one-hot encoding ``category`` produces (first category dropped)."""
-    return [f"{category}_{value}" for value in categories[1:]]
+def _dummy_column_name(category: str, value: str) -> str:
+    return f"{category}_{value}"
 
 
-def one_hot_encode_categories(
-    df: pd.DataFrame, category_values: dict[str, list[str]]
-) -> tuple[pd.DataFrame, dict[str, list[str]]]:
-    """One-hot encode each column in ``category_values`` using its fixed vocabulary.
+# Every individually-selectable one-hot column, in CATEGORY_VALUES order.
+_CATEGORY_DUMMY_COLUMNS: list[str] = [
+    _dummy_column_name(category, value)
+    for category, values in CATEGORY_VALUES.items()
+    for value in values
+]
 
-    The first category in each list is dropped to avoid the dummy-variable
-    trap, and the original category column is replaced by its dummies.
-    Returns the encoded DataFrame plus a mapping of original column name to
-    the dummy columns it was expanded into.
+# The full menu of variables a student may pick from.
+USABLE_COLUMNS: list[str] = NUMERIC_USABLE_COLUMNS + _CATEGORY_DUMMY_COLUMNS
+
+# Reverse lookup: which original category a given dummy column belongs to.
+# Used to guard against selecting every category of one field at once (see
+# validate_variable_selection).
+DUMMY_COLUMN_CATEGORY: dict[str, str] = {
+    _dummy_column_name(category, value): category
+    for category, values in CATEGORY_VALUES.items()
+    for value in values
+}
+
+
+def validate_variable_selection(variables: list[str]) -> None:
+    """Raise ValueError if ``variables`` isn't something a model can be fit on.
+
+    Two checks: every name must be in USABLE_COLUMNS, and no original
+    category may have *all* of its values selected at once -- that makes the
+    dummies sum to 1 for every row, exactly collinear with the intercept,
+    and the fit becomes unsolvable.
+    """
+    unusable = sorted(set(variables) - set(USABLE_COLUMNS))
+    if unusable:
+        raise ValueError(f"Not usable column(s): {unusable}")
+
+    chosen_by_category: dict[str, set[str]] = {}
+    for variable in variables:
+        category = DUMMY_COLUMN_CATEGORY.get(variable)
+        if category is not None:
+            chosen_by_category.setdefault(category, set()).add(variable)
+
+    for category, chosen in chosen_by_category.items():
+        all_values = {_dummy_column_name(category, value) for value in CATEGORY_VALUES[category]}
+        if chosen == all_values:
+            raise ValueError(
+                f"Selecting every category of {category!r} at once makes the model "
+                "unsolvable (they would sum to 1 for every row, exactly duplicating "
+                "the intercept) -- drop at least one."
+            )
+
+
+def one_hot_encode_categories(df: pd.DataFrame, category_values: dict[str, list[str]]) -> pd.DataFrame:
+    """One-hot encode each column in ``category_values`` into individually-named dummies.
+
+    Every category gets its own 0/1 column (e.g. "Industry" becomes
+    "Industry_Technology/Software", "Industry_Food and Beverage", ... -- all
+    of them, not N-1). The original category column is replaced by its
+    dummies.
     """
     df = df.copy()
-    dummy_columns: dict[str, list[str]] = {}
     for column, categories in category_values.items():
         typed = pd.Categorical(df[column], categories=categories)
-        dummies = pd.get_dummies(typed, prefix=column, drop_first=True, dtype=float)
+        dummies = pd.get_dummies(typed, prefix=column, dtype=float)
         dummies.index = df.index
-        expected = _dummy_column_names(column, categories)
+        expected = [_dummy_column_name(column, value) for value in categories]
         assert list(dummies.columns) == expected, f"unexpected dummy columns for {column!r}"
-        dummy_columns[column] = expected
         df = pd.concat([df.drop(columns=[column]), dummies], axis=1)
-    return df, dummy_columns
+    return df
 
 
 @dataclass(frozen=True)
 class PreparedDataset:
     """The Shark Tank data, ready to model with: usable columns only, categories
-    already one-hot encoded."""
+    already one-hot encoded into individually-selectable columns."""
 
     frame: pd.DataFrame
-    category_dummy_columns: dict[str, list[str]]
     feature_columns: list[str]
     final_test_seasons: frozenset[int]
-
-    def expand(self, logical_columns: list[str]) -> list[str]:
-        """Expand logical column names into real columns in ``frame``.
-
-        A category name like "Industry" expands to its dummy columns; a
-        plain numeric column name passes through unchanged.
-        """
-        expanded: list[str] = []
-        for column in logical_columns:
-            expanded.extend(self.category_dummy_columns.get(column, [column]))
-        return expanded
 
     def split_by_season(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Return (train, basic_test, final_test) DataFrames split by season."""
@@ -135,9 +163,9 @@ class PreparedDataset:
         return train, basic_test, final_test
 
 
-def _build_prepared_frame(raw_csv_path: Path) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+def _build_prepared_frame(raw_csv_path: Path) -> pd.DataFrame:
     raw = pd.read_csv(raw_csv_path)
-    df = raw[USABLE_COLUMNS + [TARGET_COLUMN]].copy()
+    df = raw[NUMERIC_USABLE_COLUMNS + list(CATEGORY_VALUES) + [TARGET_COLUMN]].copy()
     df = df.dropna(subset=[TARGET_COLUMN])
     return one_hot_encode_categories(df, CATEGORY_VALUES)
 
@@ -151,7 +179,7 @@ def ensure_prepared_csv(
     "convert raw CSV into a usable Python object" step made visible on disk,
     mainly so it's easy to debug exactly what a model is trained on.
     """
-    df, _ = _build_prepared_frame(raw_csv_path)
+    df = _build_prepared_frame(raw_csv_path)
     prepared_csv_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(prepared_csv_path, index=False)
     return prepared_csv_path
@@ -169,16 +197,11 @@ def load_prepared_dataset(
     ensure_prepared_csv(raw_csv_path, prepared_csv_path)
     frame = pd.read_csv(prepared_csv_path)
 
-    dummy_columns = {
-        column: _dummy_column_names(column, categories)
-        for column, categories in CATEGORY_VALUES.items()
-    }
-    feature_columns = [c for c in frame.columns if c not in (SEASON_COLUMN, TARGET_COLUMN)]
+    feature_columns = [c for c in USABLE_COLUMNS if c in frame.columns]
     final_test_seasons = frozenset(frame[SEASON_COLUMN].unique()) - TRAIN_SEASONS - BASIC_TEST_SEASONS
 
     return PreparedDataset(
         frame=frame,
-        category_dummy_columns=dummy_columns,
         feature_columns=feature_columns,
         final_test_seasons=final_test_seasons,
     )

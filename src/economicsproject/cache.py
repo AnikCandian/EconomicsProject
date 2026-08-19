@@ -39,8 +39,7 @@ class ModelCache:
         # Fit outside the lock so one slow fit doesn't block unrelated keys.
         # A duplicate concurrent fit of the same key is wasted work but
         # still correct -- whichever result lands first in the cache wins.
-        encoded_columns = self._dataset.expand(list(key))
-        fitted = fit_logit_model(encoded_columns, self._dataset)
+        fitted = fit_logit_model(list(key), self._dataset)
 
         with self._lock:
             self._cache.setdefault(key, fitted)

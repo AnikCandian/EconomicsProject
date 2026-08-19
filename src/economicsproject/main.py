@@ -19,9 +19,15 @@ from .modeling import fit_logit_model
 def run_demo() -> None:
     """Fit one example model and print it, mainly to sanity-check the setup."""
     dataset = load_prepared_dataset()
-    example_columns = dataset.expand(
-        ["Original Ask Amount", "Original Offered Equity", "Valuation Requested", "Industry"]
-    )
+    # Individual categories are picked directly -- not the whole "Industry"
+    # field toggled on at once.
+    example_columns = [
+        "Original Ask Amount",
+        "Original Offered Equity",
+        "Valuation Requested",
+        "Industry_Food and Beverage",
+        "Industry_Technology/Software",
+    ]
     fitted = fit_logit_model(example_columns, dataset)
 
     print("EconomicsProject environment is set up and working!")
