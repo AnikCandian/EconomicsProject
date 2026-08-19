@@ -71,9 +71,13 @@ function renderLeaderboardTable(bodySelector, entries, metricKey, includeEquatio
   entries.forEach((entry, index) => {
     const metrics = entry[metricKey] || {};
     const row = document.createElement("tr");
+    const name = entry.warning
+      ? `⚠️ ${entry.full_name} (${entry.student_id})`
+      : `${entry.full_name} (${entry.student_id})`;
+    if (entry.warning) row.title = entry.warning;
     row.innerHTML = `
       <td>${index + 1}</td>
-      <td>${entry.full_name} (${entry.student_id})</td>
+      <td>${name}</td>
       <td>${entry.variables.join(", ")}</td>
       <td>${fmtPct(metrics.accuracy)}</td>
       <td>${fmtPct(metrics.yes_deal_accuracy)}</td>

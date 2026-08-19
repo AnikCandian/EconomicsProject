@@ -5,6 +5,7 @@ from economicsproject.dataset import (
     NUMERIC_USABLE_COLUMNS,
     PREPARED_DATA_PATH,
     USABLE_COLUMNS,
+    fully_selected_categories,
     load_prepared_dataset,
     validate_variable_selection,
 )
@@ -54,7 +55,17 @@ def test_validate_variable_selection_accepts_a_partial_category_subset():
     validate_variable_selection(["Industry_Travel", "Industry_Automotive"])  # should not raise
 
 
-def test_validate_variable_selection_rejects_every_category_of_one_field():
+def test_validate_variable_selection_allows_every_category_of_one_field():
+    # deliberately allowed -- see modeling.describe_collinearity for why this
+    # is instead surfaced as a warning on the fitted model, not blocked here
     all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
-    with pytest.raises(ValueError, match="unsolvable"):
-        validate_variable_selection(all_industries)
+    validate_variable_selection(all_industries)  # should not raise
+
+
+def test_fully_selected_categories_detects_a_complete_field():
+    all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
+    assert fully_selected_categories(all_industries) == ["Industry"]
+
+
+def test_fully_selected_categories_ignores_a_partial_field():
+    assert fully_selected_categories(["Industry_Travel", "Industry_Automotive"]) == []

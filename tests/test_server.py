@@ -83,6 +83,26 @@ def test_full_game_flow():
     assert status_body["your_basic_test_rank"] == 1
 
 
+def test_selecting_every_category_of_a_field_is_allowed_but_warns():
+    from economicsproject.dataset import CATEGORY_VALUES
+
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
+
+    response = client.post(
+        f"/sessions/{code}/explore",
+        json={"variables": all_industries},
+        headers={"X-Student-Token": student["student_token"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["warning"] is not None
+    assert "Industry" in body["warning"]
+
+
 def test_unusable_column_is_rejected():
     session = _start_session()
     code = session["session_code"]

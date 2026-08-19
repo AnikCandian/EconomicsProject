@@ -100,31 +100,28 @@ DUMMY_COLUMN_CATEGORY: dict[str, str] = {
 
 
 def validate_variable_selection(variables: list[str]) -> None:
-    """Raise ValueError if ``variables`` isn't something a model can be fit on.
+    """Raise ValueError if any name in ``variables`` isn't a real, usable column.
 
-    Two checks: every name must be in USABLE_COLUMNS, and no original
-    category may have *all* of its values selected at once -- that makes the
-    dummies sum to 1 for every row, exactly collinear with the intercept,
-    and the fit becomes unsolvable.
+    Deliberately does NOT reject selecting every category of one field at
+    once (e.g. all 16 Industry values) -- that's numerically degenerate
+    (see modeling.describe_collinearity) but not disallowed. Letting a
+    student pick it and see *why* the resulting model is meaningless is a
+    better lesson than silently blocking the option.
     """
     unusable = sorted(set(variables) - set(USABLE_COLUMNS))
     if unusable:
         raise ValueError(f"Not usable column(s): {unusable}")
 
-    chosen_by_category: dict[str, set[str]] = {}
-    for variable in variables:
-        category = DUMMY_COLUMN_CATEGORY.get(variable)
-        if category is not None:
-            chosen_by_category.setdefault(category, set()).add(variable)
 
-    for category, chosen in chosen_by_category.items():
-        all_values = {_dummy_column_name(category, value) for value in CATEGORY_VALUES[category]}
-        if chosen == all_values:
-            raise ValueError(
-                f"Selecting every category of {category!r} at once makes the model "
-                "unsolvable (they would sum to 1 for every row, exactly duplicating "
-                "the intercept) -- drop at least one."
-            )
+def fully_selected_categories(variables: list[str]) -> list[str]:
+    """Which category fields (if any) have every one of their values present
+    in ``variables`` -- the classic one-hot dummy-variable trap."""
+    chosen = set(variables)
+    return [
+        category
+        for category, values in CATEGORY_VALUES.items()
+        if {_dummy_column_name(category, value) for value in values} <= chosen
+    ]
 
 
 def one_hot_encode_categories(df: pd.DataFrame, category_values: dict[str, list[str]]) -> pd.DataFrame:

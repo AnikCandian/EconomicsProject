@@ -98,9 +98,9 @@ Naming convention: `<OriginalHeader>_<DiscreteValue>`.
 
 Picking a **subset** of a field's categories (e.g. just `Industry_Travel`
 and `Industry_Automotive`) is fine. Picking **every** category of the same
-field at once is rejected with a `400` — those dummies would sum to 1 for
-every row, exactly duplicating the model's intercept, making the fit
-unsolvable.
+field at once is *allowed* — deliberately not rejected, see "Degenerate
+fits" below — but the resulting model is numerically meaningless, and the
+response says so via a `warning` field.
 
 `POST /sessions/{code}/join` echoes three things so a frontend can build its
 variable picker without hardcoding any of this:
@@ -148,6 +148,53 @@ Each score is a `ConfusionMetrics` object:
   decent accuracy while being useless. `null` for `yes_deal_accuracy` /
   `no_deal_accuracy` only if a slice has zero examples of that outcome
   (won't happen with this dataset, but the API stays honest about it).
+
+## Degenerate fits
+
+A student can select every category of the same one-hot field at once (e.g.
+all 16 `Industry_*` columns). This is allowed on purpose rather than
+rejected — it's a genuinely instructive mistake, and blocking it teaches
+nothing. But it does make the design matrix perfectly multicollinear: those
+16 dummy columns sum to 1 for every row, exactly duplicating the intercept
+column. That has a real consequence worth understanding, not just avoiding.
+
+**What actually happens, numerically:** the fit doesn't error out. statsmodels
+happily reports "Optimization terminated successfully" and hands back an
+equation that looks completely normal. But there's no unique solution —
+shift the intercept by any constant `c` and every one of that field's
+coefficients by `-c`, and you get *identical* predictions for every row
+(exactly one dummy is always 1, so the `+c`/`-c` always cancels). That's an
+entire line of equally-"correct" coefficient vectors, not one answer.
+Empirically: Newton's method, BFGS, and L-BFGS each converge to *different*
+numbers on the exact same data (we checked — predicted probabilities
+differed by up to 3.5 percentage points between solvers), standard errors
+come back `NaN`, and the design matrix's condition number is on the order of
+10¹⁵ (numerically singular).
+
+So the backend detects this directly (design-matrix rank deficiency via
+`numpy.linalg.matrix_rank`, not by pattern-matching "did they pick every
+category" — the same detection catches any combination of variables that
+happens to be exactly collinear, not just this one anticipated case) and
+attaches a `warning` string to the response explaining it. `warning` is
+`null` on every normal fit, and appears on `explore`/`finalize` responses
+and on leaderboard entries (so a professor can see, live, if a student's
+model is degenerate):
+
+```json
+{
+  "status": "ok",
+  "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
+  "equation": "logit(P(Got Deal)) = -0.0259 + 0.3135 * Industry_Automotive + ...",
+  "basic_test": { "accuracy": 0.560, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.299, "sample_size": 284 },
+  "warning": "This variable set is perfectly multicollinear: every category of 'Industry' was selected at once, so those dummy columns sum to 1 for every row -- exactly duplicating the intercept. There is no unique best-fit answer -- the coefficients below are just one arbitrary point among infinitely many that score identically. Different solvers (or even the same solver from a different starting point) can return different numbers for the exact same data, and standard errors are undefined. Treat this as a demonstration of a broken fit, not a usable model."
+}
+```
+
+(A genuinely unfittable design matrix — statsmodels hard-fails rather than
+silently returning an arbitrary answer — is the one case that *does* still
+come back as an error: `400` with a `detail` explaining the same thing. This
+is rare; every case we've tried, including the full-category one above,
+returns a degenerate-but-present result instead.)
 
 ## Model caching
 
@@ -259,9 +306,15 @@ student wants while they experiment.
   "status": "ok",
   "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"],
   "equation": "logit(P(Got Deal)) = 0.7460 + 0.0903 * Industry_Food and Beverage + 0.3893 * Industry_Travel - 0.0000 * Original Ask Amount",
-  "basic_test": { "accuracy": 0.570, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.330, "sample_size": 284 }
+  "basic_test": { "accuracy": 0.570, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.330, "sample_size": 284 },
+  "warning": null
 }
 ```
+
+`warning` is non-`null` if this exact variable set makes the fit
+numerically degenerate (e.g. every category of one field selected at once)
+-- see "Degenerate fits" above. It's still a `200` with a real, fitted
+equation; the model just isn't a meaningful one.
 
 **Response** `200` (if this student already finalized — see "Real-time
 updates" for why this is a response, not a push):
@@ -274,16 +327,15 @@ updates" for why this is a response, not a push):
   "equation": "...",
   "basic_test": { "...": "..." },
   "final_test": null,
+  "warning": null,
   "finalized_at": 1787121482.58
 }
 ```
 
-**Errors also include:** `400` if `variables` selects every category of the
-same field at once (see "The variable universe" above).
-
 `final_test` stays `null` until the session is stopped.
 
-**Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`; `401`
+**Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`, or if
+statsmodels itself fails to fit at all (rare -- see "Degenerate fits"); `401`
 bad/missing student token; `404` unknown session; `409` session already
 closed (and this student hadn't already finalized before it closed).
 
@@ -328,6 +380,7 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
       "equation": "...",
       "basic_test": { "accuracy": 0.570, "...": "..." },
       "final_test": null,
+      "warning": null,
       "finalized_at": 1787121482.58
     }
   ]
@@ -338,7 +391,9 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
 exploring doesn't show up (or affect the ranking) until they commit.
 Sorted descending by `basic_test.accuracy`. `average_variables_chosen` is the
 mean size of `variables` across finalized submissions only (`0` if nobody has
-finalized yet).
+finalized yet). A non-`null` `warning` on a leaderboard entry is visible to
+the professor live — a natural moment to point out, on the spot, why that
+student's number doesn't mean what it looks like it means.
 
 **Errors:** `403` wrong `X-Host-Token`; `404` unknown session.
 

@@ -60,6 +60,14 @@ function renderResult(data) {
   document.getElementById("result-raw").textContent = JSON.stringify(data, null, 2);
   document.getElementById("result-equation").textContent = data.equation || "";
 
+  const warningEl = document.getElementById("result-warning");
+  if (data.warning) {
+    warningEl.textContent = "⚠️ " + data.warning;
+    warningEl.hidden = false;
+  } else {
+    warningEl.hidden = true;
+  }
+
   const metrics = data.basic_test || {};
   document.getElementById("result-summary").innerHTML = `
     <dt>Status</dt><dd>${data.status}</dd>

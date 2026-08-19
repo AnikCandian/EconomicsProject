@@ -28,7 +28,7 @@ from .dataset import (
     load_prepared_dataset,
     validate_variable_selection,
 )
-from .modeling import ConfusionMetrics
+from .modeling import ConfusionMetrics, ModelFitError
 from .sessions import (
     InvalidHostTokenError,
     SessionClosedError,
@@ -84,6 +84,11 @@ async def _handle_closed(request, exc: SessionClosedError):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
+@app.exception_handler(ModelFitError)
+async def _handle_model_fit_error(request, exc: ModelFitError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # -- auth / validation helpers ------------------------------------------------
 
 
@@ -117,6 +122,7 @@ def _submission_dict(submission: Submission) -> dict:
         "basic_test": _metrics_dict(submission.basic_test),
         "final_test": _metrics_dict(submission.final_test) if submission.final_test else None,
         "finalized_at": submission.finalized_at,
+        "warning": submission.warning,
     }
 
 
@@ -193,6 +199,7 @@ def explore(code: str, body: schemas.ExploreRequest, x_student_token: str = Head
         "variables": sorted(set(body.variables)),
         "equation": fitted.equation,
         "basic_test": _metrics_dict(fitted.basic_test),
+        "warning": fitted.warning,
     }
 
 
