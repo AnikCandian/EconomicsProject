@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Pick your variables{% endblock %}
+{% block content %}
+<p>Session <strong id="session-code-display"></strong> — playing as <strong id="student-name-display"></strong></p>
+
+<section id="closed-banner" hidden class="banner">The professor has ended this session.</section>
+<section id="submitted-banner" hidden class="banner">You've already finalized your submission — read-only from here.</section>
+
+<form id="variables-form">
+  <fieldset id="numeric-fieldset">
+    <legend>Numeric variables</legend>
+  </fieldset>
+  <div id="category-fieldsets"></div>
+
+  <button type="button" id="explore-btn">Explore (try it out)</button>
+  <button type="button" id="finalize-btn">Finalize (lock it in)</button>
+</form>
+
+<section id="result-section">
+  <h3>Result</h3>
+  <dl id="result-summary"></dl>
+  <p><strong>Equation:</strong> <code id="result-equation"></code></p>
+  <details>
+    <summary>Raw response</summary>
+    <pre id="result-raw"></pre>
+  </details>
+</section>
+
+<section id="final-section" hidden>
+  <h3>Session results</h3>
+  <dl id="final-summary"></dl>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/play.js') }}"></script>
+{% endblock %}

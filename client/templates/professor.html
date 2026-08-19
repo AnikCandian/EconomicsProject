@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Professor{% endblock %}
+{% block content %}
+
+<section id="start-section">
+  <h2>Start a session</h2>
+  <label>Professor key
+    <input id="professor-key" type="password" autocomplete="off">
+  </label>
+  <button id="start-btn">Start session</button>
+  <p id="start-error" class="error"></p>
+</section>
+
+<section id="session-section" hidden>
+  <h2>Session <span id="session-code"></span></h2>
+  <p>
+    Share this code with students.
+    Host token (kept only in this browser tab): <code id="host-token"></code>
+  </p>
+  <button id="stop-btn">Stop session</button>
+  <p id="stop-error" class="error"></p>
+
+  <h3>Dashboard <small>(polling every 5 seconds)</small></h3>
+  <dl id="dashboard-summary"></dl>
+
+  <h3>Students online</h3>
+  <ul id="students-online"></ul>
+
+  <h3>Leaderboard <small>(finalized submissions, basic test)</small></h3>
+  <div class="table-scroll">
+    <table id="leaderboard-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Student</th><th>Variables</th>
+          <th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th><th>Equation</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="results-section" hidden>
+  <h2>Final results</h2>
+
+  <h3>Leaderboard — seasons 8-10 (basic test)</h3>
+  <div class="table-scroll">
+    <table id="basic-results-table">
+      <thead>
+        <tr><th>#</th><th>Student</th><th>Variables</th><th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <h3>Leaderboard — seasons 11+ (final test)</h3>
+  <div class="table-scroll">
+    <table id="final-results-table">
+      <thead>
+        <tr><th>#</th><th>Student</th><th>Variables</th><th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/professor.js') }}"></script>
+{% endblock %}
