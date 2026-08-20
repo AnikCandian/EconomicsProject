@@ -39,6 +39,11 @@ override either with `HOST`/`PORT`). `API_BASE_URL` is baked into every page
 as `window.API_BASE_URL` so the browser knows where to send its `fetch()`
 calls — point it at wherever the FastAPI backend actually runs.
 
+For letting students join from their own devices (phones included) rather
+than just testing on one machine, see `../client/README.md`, "Running for a
+real classroom" — the same `HOST`/`API_BASE_URL` steps apply here, just
+swap in this directory and its port (5001).
+
 Requires the backend's CORS to allow this page's origin (`CORS_ORIGINS` env
 var on the backend; the default `"*"` already covers this).
 
