@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Deal-Likelihood Game{% endblock %}
+{% block content %}
+<p>A classroom game: pick predictor variables, build a logit model, and see
+how well it predicts Shark Tank deal outcomes.</p>
+
+<div class="role-cards">
+  <a class="card" href="{{ url_for('professor') }}">
+    <h2>I'm the Professor</h2>
+    <p>Start a session, watch the live dashboard, and stop the game.</p>
+  </a>
+  <a class="card" href="{{ url_for('join') }}">
+    <h2>I'm a Student</h2>
+    <p>Join a session with a code and pick your variables.</p>
+  </a>
+</div>
+
+<p><small>API base URL: <code>{{ api_base_url }}</code></small></p>
+{% endblock %}

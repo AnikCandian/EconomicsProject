@@ -9,6 +9,12 @@ The visual design is a reimplementation of a "Deal Probability" mockup built
 in Claude Design (claude.ai/design) — see "Design origin" below for what
 came from the mockup, what changed, and why.
 
+A plainer, minimal-styling client also lives at
+[`../client_barebones/`](../client_barebones/) — same pages, same API, no
+design system on top. Handy for eyeballing raw API responses, or as a
+starting point for a different design. Both can run at once (this one on
+port 5000, the barebones one on 5001 by default).
+
 ## Pages
 
 - `/` — landing: student join (session code + name), or an administrator
