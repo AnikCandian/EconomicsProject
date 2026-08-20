@@ -18,15 +18,15 @@ revealed against a hold-out nobody could see while playing.
 - Professor sends an authenticated request to start a "server" and gets back
   a join code (Kahoot-style) to share with students.
 - Students join with their full name and get a unique token back.
-- Students repeatedly POST a list of variable names to try. If those
+- Students POST a list of variable names to submit as an attempt. If those
   variables are usable, the backend checks a model cache first; on a miss it
   fits a logit model, caches it, and either way returns the % of actual
   yes-deals predicted correctly and % of actual no-deals predicted correctly
   (never raw accuracy alone — the dataset skews toward deals happening, so
   accuracy alone rewards always guessing "yes").
-- A separate "finalize" call locks in a student's choice. It's one-shot:
-  calling it again, or calling explore again afterward, returns a distinct
-  `already_submitted` response instead of recomputing.
+- Each student gets **3 attempts**, not 1 — see "Significant design
+  decision: three attempts" below for the full reasoning and why an earlier
+  unlimited-live-preview design was deprecated in favor of this.
 - Every 5 seconds the professor polls a dashboard: leaderboard, who's
   online, average variable count across finalized submissions. **This is a
   deliberate polling design, not push** — the professor is expected to be
@@ -85,6 +85,47 @@ than either, since the response would look completely normal. See
 `API_PROTOCOL.md`, "Degenerate fits," for the full writeup and an example
 payload.
 
+## Significant design decision: three attempts, confirmed via polling, not one submission with live preview
+
+The original design let students call `/explore` an unlimited number of
+times before a one-shot `/finalize`, seeing basic-test accuracy update live
+as they toggled checkboxes. That's gone. Current design: `/explore` is
+**deprecated but not deleted** (still fully functional, `deprecated: true`
+in the OpenAPI schema, unused by both shipped clients — a one-line revert
+if this call turns out wrong), and `/finalize` now allows
+`sessions.MAX_ATTEMPTS` (3) submissions per student per session instead of
+one. There's no live pre-submission feedback any more; every submission is
+real and counts.
+
+**The two changes are linked, and the second one exists because of the
+first.** Once submissions are scarce (3, not unlimited), a client can no
+longer treat a lost HTTP response as harmless ("just try again") — the
+attempt is recorded server-side the instant `Session.finalize()` computes
+it, regardless of whether the response carrying that result ever reaches
+the browser (dropped wifi, closed tab — real risks in a room full of
+student laptops/phones). So `GET /sessions/{code}/attempts` exists as the
+authoritative, idempotent source of truth: the documented client pattern is
+POST to `/finalize` without trusting its response, then poll
+`GET /attempts` every ~1 second until the new attempt shows up, and only
+then re-enable submission. This is a **client-side convention**, not
+something the server enforces — the server's only actual rule is the count
+itself (a 4th `finalize` call returns `status: "attempts_exhausted"` with
+the 3rd attempt's data unchanged, never a new fit). See API_PROTOCOL.md,
+"Attempts," for the full endpoint contract; don't skip the polling pattern
+when touching client code, it's the entire reason `/attempts` exists.
+
+**"Current standing" is always the best attempt, not the latest.** A
+student's position on the professor's dashboard and on both final
+leaderboards (`Session.dashboard()`, `Session.close()`) is their
+highest-`basic_test.accuracy` attempt so far — computed via
+`Session.best_attempt_for()`, the one place this selection logic lives.
+`GET /attempts` is the opposite: it always returns *every* attempt, which
+is the whole point of the "check my previous submissions" ask this was
+built for. On `close()`, every attempt from every student gets scored
+against the final hold-out (not just each student's best) — that's what
+lets a student later see, via `GET /attempts`, which of their 3 tries
+would actually have scored best on the data nobody could see while playing.
+
 ## Module responsibilities (keep this modular)
 
 - `dataset.py` — the only place that knows about the raw CSV,
@@ -99,10 +140,11 @@ payload.
 - `cache.py` — `ModelCache`, keyed by the exact (order-independent) set of
   variables. One fit per distinct variable set per process, shared across
   all game sessions.
-- `sessions.py` — in-memory game state: join codes, students,
-  explore/finalize semantics, the professor's dashboard snapshot, and
-  closing a session (the only place `modeling.score_final_test` gets
-  called).
+- `sessions.py` — in-memory game state: join codes, students, the 3-attempt
+  submission semantics (`MAX_ATTEMPTS`, `Session.finalize()`,
+  `Session.attempts_for()`, `Session.best_attempt_for()`), the professor's
+  dashboard snapshot, and closing a session (the only place
+  `modeling.score_final_test` gets called, for every attempt).
 - `schemas.py` / `server.py` — the FastAPI HTTP layer. Should stay thin; if
   you're writing real logic here instead of in the modules above, it
   probably belongs in one of them instead.
@@ -132,7 +174,7 @@ asserting it.
 ## Testing
 
 One test file per module in `tests/`. Run with `pytest`. `tests/test_server.py`
-exercises the full join → explore → finalize → already_submitted →
+exercises the full join → finalize ×3 → attempts poll → attempts_exhausted →
 dashboard → stop flow through FastAPI's `TestClient`, which is the fastest
 way to sanity-check a change to the API layer end to end.
 
@@ -140,5 +182,6 @@ way to sanity-check a change to the API layer end to end.
 
 See `API_PROTOCOL.md`, "Scope and limitations," for the full list — in
 short: in-memory single-process state only, shared-secret auth rather than
-real accounts, no rate limiting on `/explore`, and students only see their
-own final rank rather than a fully public leaderboard.
+real accounts, no rate limiting on the polling endpoints (fine at classroom
+scale), and students only see their own final rank rather than a fully
+public leaderboard.

@@ -20,8 +20,9 @@ port 5000, the barebones one on 5001 by default).
 - `/` — landing: student join (session code + name), or an administrator
   sign-in toggle
 - `/play` — student's model builder: a checkbox per usable variable
-  (grouped, every one-hot category individually selectable), explore/save,
-  and its own final result once the session ends
+  (grouped, every one-hot category individually selectable), up to 3 scored
+  submit attempts with a running "Your attempts" table, and its own final
+  result once the session ends
 - `/professor` — start/stop a session, a live-polled dashboard (leaderboard,
   who's online, most-included predictors, accuracy distribution — all
   computed from the real, current session), and Final Results once stopped
@@ -113,8 +114,13 @@ actually does, and were adapted rather than faked:
 
 - **The whole "fitted logit curve" and its accuracy number were simulated
   client-side math** (a fake `signal`/`slope` formula, no real fit
-  happening). Replaced with real `/explore` calls, debounced on every
-  checkbox change — the entire point of this rebuild.
+  happening). Replaced with a real fit on every submit attempt (`POST
+  /finalize`) — the entire point of this rebuild. There is no live
+  preview-while-checking-boxes: a student checks variables, then clicks
+  "Submit attempt," which is scored for real and counts against their 3
+  attempts. (An earlier version of this same client did fit live on every
+  checkbox change via `POST /explore` — see "Attempts, not live exploring"
+  below for why that was deliberately removed.)
 - **Admin-configurable training seasons.** The mockup lets an admin toggle
   which seasons train the model at runtime. The backend has a fixed split
   (seasons 1–7 train, 8–10 basic test, 11+ held out) with no such endpoint,
@@ -146,6 +152,34 @@ actually does, and were adapted rather than faked:
 - **"Most-included predictors" and "Accuracy distribution."** Kept, but now
   computed client-side from the real, current session's leaderboard on
   every poll — not the mockup's fabricated multi-day dataset.
+
+## Attempts, not live exploring
+
+This is a recent, deliberate departure from both the original mockup and
+this client's own earlier implementation, not something adapted from the
+mockup — see the repo root `CLAUDE.md`, "Three attempts, confirmed via
+polling, not one submission with live preview," and `API_PROTOCOL.md`,
+"Attempts," for the full backend-side rationale. On the client:
+
+- `POST /sessions/{code}/explore` still exists on the backend (marked
+  `deprecated=True`, functional for rollback) but `builder.js` never calls
+  it. There's no more debounced live-fit-on-checkbox-change — checkboxes
+  just accumulate a selection.
+- "Submit attempt" calls `POST /finalize`, which scores for real and
+  consumes one of 3 attempts. The response to that POST is **not trusted
+  on its own** — after sending it, the page disables the form and polls
+  `GET /sessions/{code}/attempts` every 1 second until the attempt count it
+  returns has actually gone up, then re-enables the form (or shows the
+  "no attempts left" banner if that was the 3rd). This protects against a
+  dropped/lost HTTP response after the attempt was already consumed
+  server-side — the poll is the source of truth, not the POST's response
+  body. This lock is purely client-side convention, per how the game is
+  meant to be played; the server does not itself block a 4th `/finalize`
+  call while a poll is in flight, it only ever enforces the 3-attempt cap.
+- The "Your attempts" table on `/play` is populated straight from
+  `GET /attempts`, which always returns every attempt so far (not just the
+  best) — variables, accuracy, yes-deal %, no-deal %, and (once the session
+  ends) each attempt's final-test score.
 
 ## Notes
 

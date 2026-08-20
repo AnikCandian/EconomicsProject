@@ -188,6 +188,16 @@ input { font-family: inherit; }
 }
 .equation-caption { font-size: 11px; color: var(--color-neutral-600); margin-top: 6px; }
 
+.attempts-table-wrap { overflow-x: auto; }
+.attempts-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.attempts-table th {
+  text-align: left; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--color-neutral-600); border-bottom: 2px solid var(--color-divider); padding: 8px 10px 8px 0; white-space: nowrap;
+}
+.attempts-table td {
+  padding: 8px 10px 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--color-text) 14%, transparent); white-space: nowrap;
+}
+
 .predictor-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
 .predictor-group { padding: 20px 32px 26px; border-top: 2px solid var(--color-divider); border-right: 1px solid color-mix(in srgb, var(--color-text) 14%, transparent); }
 .predictor-group__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }

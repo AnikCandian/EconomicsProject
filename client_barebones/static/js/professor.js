@@ -71,9 +71,8 @@ function renderLeaderboardTable(bodySelector, entries, metricKey, includeEquatio
   entries.forEach((entry, index) => {
     const metrics = entry[metricKey] || {};
     const row = document.createElement("tr");
-    const name = entry.warning
-      ? `⚠️ ${entry.full_name} (${entry.student_id})`
-      : `${entry.full_name} (${entry.student_id})`;
+    const label = `${entry.full_name} (${entry.student_id}) · best of attempt ${entry.attempt_number}`;
+    const name = entry.warning ? `⚠️ ${label}` : label;
     if (entry.warning) row.title = entry.warning;
     row.innerHTML = `
       <td>${index + 1}</td>

@@ -2,9 +2,11 @@
 {% block title %}Pick your variables{% endblock %}
 {% block content %}
 <p>Session <strong id="session-code-display"></strong> — playing as <strong id="student-name-display"></strong></p>
+<p>Attempts used: <strong id="attempts-counter">0 / 3</strong></p>
 
 <section id="closed-banner" hidden class="banner">The professor has ended this session.</section>
-<section id="submitted-banner" hidden class="banner">You've already finalized your submission — read-only from here.</section>
+<section id="exhausted-banner" hidden class="banner">You've used all your attempts — read-only from here.</section>
+<section id="pending-banner" hidden class="banner">Submitted — confirming with the server…</section>
 
 <form id="variables-form">
   <fieldset id="numeric-fieldset">
@@ -12,12 +14,12 @@
   </fieldset>
   <div id="category-fieldsets"></div>
 
-  <button type="button" id="explore-btn">Explore (try it out)</button>
-  <button type="button" id="finalize-btn">Finalize (lock it in)</button>
+  <button type="button" id="submit-btn">Submit attempt (1 of 3)</button>
+  <p><small>No live preview — pick your variables and submit. You get 3 attempts; each one is scored for real, so use them deliberately.</small></p>
 </form>
 
 <section id="result-section">
-  <h3>Result</h3>
+  <h3>Latest attempt</h3>
   <p id="result-warning" class="banner warning-banner" hidden></p>
   <dl id="result-summary"></dl>
   <p><strong>Equation:</strong> <code id="result-equation"></code></p>
@@ -25,6 +27,18 @@
     <summary>Raw response</summary>
     <pre id="result-raw"></pre>
   </details>
+</section>
+
+<section id="attempts-section">
+  <h3>Your attempts</h3>
+  <div class="table-scroll">
+    <table id="attempts-table">
+      <thead>
+        <tr><th>#</th><th>Variables</th><th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th><th>Final test</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </section>
 
 <section id="final-section" hidden>

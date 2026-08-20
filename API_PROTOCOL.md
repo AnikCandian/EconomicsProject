@@ -1,9 +1,9 @@
 # Deal-Likelihood Game — API Protocol
 
 A classroom game where a professor hosts a session (a "server," Kahoot-style),
-students join with a code, pick predictor variables, and get live feedback on
-how well a logit model built from those variables predicts Shark Tank deal
-outcomes. The professor watches a live dashboard and, at the end, gets two
+students join with a code, and each gets up to 3 attempts to pick predictor
+variables for a logit model of Shark Tank deal outcomes, scored for real each
+time. The professor watches a live dashboard and, at the end, gets two
 leaderboards scored against data nobody saw while playing.
 
 This document is the contract between the backend (`economicsproject.server`)
@@ -35,7 +35,7 @@ Three credential types, sent as headers:
 |---|---|---|---|
 | Professor | `X-Professor-Key` | Set as the `PROFESSOR_API_KEY` env var before starting the server (shared secret, out of band) | `POST /sessions` only |
 | Host (that professor's session) | `X-Host-Token` | Response of `POST /sessions` | `GET /sessions/{code}/dashboard`, `POST /sessions/{code}/stop` |
-| Student | `X-Student-Token` | Response of `POST /sessions/{code}/join` | `POST /sessions/{code}/explore`, `POST /sessions/{code}/finalize`, `GET /sessions/{code}/status` |
+| Student | `X-Student-Token` | Response of `POST /sessions/{code}/join` | `POST /sessions/{code}/finalize`, `GET /sessions/{code}/attempts`, `GET /sessions/{code}/status`, and (deprecated) `POST /sessions/{code}/explore` |
 
 `X-Professor-Key` gates who may create a session at all. Once a session
 exists, its own `host_token` is sufficient to control it — the professor key
@@ -149,6 +149,58 @@ Each score is a `ConfusionMetrics` object:
   `no_deal_accuracy` only if a slice has zero examples of that outcome
   (won't happen with this dataset, but the API stays honest about it).
 
+## Attempts
+
+Each student gets `MAX_ATTEMPTS` (currently **3**) submissions per session,
+not one. This replaced an earlier one-shot "explore live, then finalize
+once" design — see below for why, and why `/explore` is now deprecated
+rather than removed.
+
+**Why 3 attempts instead of unlimited live exploring.** The previous design
+let a student call `/explore` as many times as they liked before committing,
+seeing basic-test accuracy on every keystroke. That's pedagogically
+generous but functionally pointless to keep once the game is meant to feel
+like a small number of deliberate, real submissions rather than an
+open-ended search — so live pre-submission feedback is gone, and every
+submission actually counts. `/explore` itself is **deprecated, not
+deleted**: it's still fully functional (see its endpoint doc below) so this
+is a one-line revert if that turns out to be the wrong call, but neither
+shipped client calls it any more.
+
+**Why the client should poll `GET /attempts` instead of trusting the
+`POST /finalize` response.** An attempt is recorded server-side the moment
+`/finalize` computes it — regardless of whether the HTTP response carrying
+that result actually makes it back to the student's browser (a dropped
+connection, a closed tab, flaky classroom wifi). With unlimited attempts
+that was a non-issue: just try again. With only 3, a lost response would
+mean a student burns an attempt and never finds out what happened. So the
+recommended client pattern is:
+
+1. `POST /finalize`. Treat the response as a hint at best — don't render it
+   directly, and don't worry if the request itself errors out (the attempt
+   may still have landed).
+2. Immediately start polling `GET /sessions/{code}/attempts` every second.
+3. Keep the "submit" button disabled while polling.
+4. Once the poll's `attempts_used` reflects the new attempt, stop polling,
+   render from *that* response, and re-enable submission if
+   `attempts_remaining > 0`.
+
+`GET /attempts` is idempotent and cheap (a dict lookup, no computation), so
+polling it is safe to retry indefinitely and imposes no meaningful load.
+This "don't trust the POST, confirm via GET" pattern is a client-side
+convention, not something the server enforces — the server's only real
+rule is the count itself: the 4th `finalize` call (and beyond) returns
+`status: "attempts_exhausted"` with the *3rd* attempt's data unchanged, it
+does not error and does not silently accept a 4th submission.
+
+**What counts as "current standing."** With multiple attempts, a student's
+position on the professor's dashboard and on both final leaderboards is
+always their **best attempt so far by basic-test accuracy** — not their
+most recent, not an average. `GET /attempts`, on the other hand, always
+returns *every* attempt (that's the whole point of it) so a student can see
+exactly how each of their 3 tries actually did, including which one
+strategy would have scored best on the (eventually revealed) final test.
+
 ## Degenerate fits
 
 A student can select every category of the same one-hot field at once (e.g.
@@ -217,10 +269,13 @@ This API has no push channel. Two consequences:
    a `setInterval(..., 5000)` — the backend has no timer of its own and just
    answers with current state whenever asked.
 2. **Students find out a session ended by polling too**, or by the natural
-   403/409 they'll get on their next `explore`/`finalize` call after
-   `/stop` — there's no way for the backend to interrupt them mid-session.
-   Use `GET /sessions/{code}/status` for this; poll it however often feels
-   right (a few seconds is plenty).
+   `409` they'll get on their next `/finalize` call after `/stop` — there's
+   no way for the backend to interrupt them mid-session. Use
+   `GET /sessions/{code}/status` for this; poll it however often feels right
+   (a few seconds is plenty). This is separate from the *much* tighter
+   ~1-second poll of `GET /sessions/{code}/attempts` right after submitting
+   an attempt — see "Attempts" above; that one exists for confirmation, not
+   for detecting the session ending.
 
 If you need instant push (e.g. a student's screen should update the moment
 the professor stops the game, not next-poll), that requires WebSockets or
@@ -277,21 +332,27 @@ A student joins a session with their name.
     "Industry_Travel": "Industry",
     "Pitchers Gender_Female": "Pitchers Gender",
     "...": "..."
-  }
+  },
+  "max_attempts": 3
 }
 ```
 
 `student_token` identifies this student for every subsequent call — store it
 client-side (e.g. `sessionStorage`) and send it as `X-Student-Token`.
+`max_attempts` is echoed here so a frontend doesn't need to hardcode it.
 
 **Errors:** `404` unknown `code`; `400` empty `full_name`.
 
 ---
 
-### `POST /sessions/{code}/explore`
+### `POST /sessions/{code}/explore` — deprecated
 
-Try out a set of variables. Cheap and repeatable — call this as often as a
-student wants while they experiment.
+**Deprecated as of the attempts model — see "Attempts" above.** Not called
+by either shipped client any more, but left fully functional in case that
+decision gets reverted. Fits (or reuses a cached fit for) the given
+variables and returns basic-test metrics **without consuming an attempt**.
+Marked `deprecated: true` in the OpenAPI schema (visible struck-through in
+`/docs`).
 
 **Headers:** `X-Student-Token: <token>`
 
@@ -300,7 +361,7 @@ student wants while they experiment.
 { "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"] }
 ```
 
-**Response** `200` (first time, or any time before this student finalizes):
+**Response** `200`:
 ```json
 {
   "status": "ok",
@@ -311,50 +372,115 @@ student wants while they experiment.
 }
 ```
 
-`warning` is non-`null` if this exact variable set makes the fit
-numerically degenerate (e.g. every category of one field selected at once)
--- see "Degenerate fits" above. It's still a `200` with a real, fitted
-equation; the model just isn't a meaningful one.
+Or, once this student has used all `MAX_ATTEMPTS` submissions on
+`/finalize` (exploring doesn't grant extra ones back):
+```json
+{ "status": "attempts_exhausted", "attempts_used": 3, "attempts_remaining": 0 }
+```
 
-**Response** `200` (if this student already finalized — see "Real-time
-updates" for why this is a response, not a push):
+**Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`, or if
+statsmodels itself fails to fit at all (rare -- see "Degenerate fits"); `401`
+bad/missing student token; `404` unknown session; `409` session already
+closed.
+
+---
+
+### `POST /sessions/{code}/finalize`
+
+Submit an attempt. Up to `MAX_ATTEMPTS` (3) per student per session — see
+"Attempts" above for the full reasoning, including why the client should
+confirm via `GET /attempts` rather than trust this response directly.
+
+**Headers:** `X-Student-Token: <token>`
+
+**Request body:**
+```json
+{ "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"] }
+```
+
+**Response** `200` (attempt recorded):
 ```json
 {
-  "status": "already_submitted",
+  "status": "ok",
+  "attempts_used": 1,
+  "attempts_remaining": 2,
+  "max_attempts": 3,
   "student_id": "S1",
   "full_name": "Ada Lovelace",
+  "attempt_number": 1,
   "variables": ["Industry_Food and Beverage", "Industry_Travel", "Original Ask Amount"],
-  "equation": "...",
-  "basic_test": { "...": "..." },
+  "equation": "logit(P(Got Deal)) = 0.7460 + 0.0903 * Industry_Food and Beverage + 0.3893 * Industry_Travel - 0.0000 * Original Ask Amount",
+  "basic_test": { "accuracy": 0.570, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.330, "sample_size": 284 },
   "final_test": null,
   "warning": null,
   "finalized_at": 1787121482.58
 }
 ```
 
-`final_test` stays `null` until the session is stopped.
+**Response** `200` (all attempts already used — this student's *3rd*
+attempt is returned unchanged, a 4th is never recorded):
+```json
+{
+  "status": "attempts_exhausted",
+  "attempts_used": 3,
+  "attempts_remaining": 0,
+  "max_attempts": 3,
+  "attempt_number": 3,
+  "variables": ["...the 3rd attempt's variables, not the ones just submitted..."],
+  "...": "rest of the shape is the 3rd attempt's data, unchanged"
+}
+```
+
+`final_test` stays `null` on every attempt until the session is stopped —
+this is a genuine hold-out; nothing here reveals it early.
 
 **Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`, or if
-statsmodels itself fails to fit at all (rare -- see "Degenerate fits"); `401`
+statsmodels itself fails to fit at all (rare -- see "Degenerate fits"). Note:
+an exhausted student's `variables` are never even validated (there's no
+attempt left to spend on them), so a bad column list from a student with 0
+attempts remaining still comes back `attempts_exhausted`, not `400`. `401`
 bad/missing student token; `404` unknown session; `409` session already
-closed (and this student hadn't already finalized before it closed).
+closed (and this student hadn't used all their attempts before it closed).
 
 ---
 
-### `POST /sessions/{code}/finalize`
+### `GET /sessions/{code}/attempts`
 
-Lock in a variable set. One-shot per student — calling it again just returns
-the original submission unchanged (`status: "already_submitted"`), even with
-different `variables` in the body.
+Every attempt this student has made, oldest first. This is the endpoint to
+poll (every ~1 second) right after `POST /finalize` — see "Attempts" above
+for why it's the trustworthy source of truth, not the POST response.
 
 **Headers:** `X-Student-Token: <token>`
 
-**Request body:** same shape as `/explore`.
+**Response** `200`:
+```json
+{
+  "attempts": [
+    {
+      "student_id": "S1",
+      "full_name": "Ada Lovelace",
+      "attempt_number": 1,
+      "variables": ["Industry_Travel"],
+      "equation": "...",
+      "basic_test": { "accuracy": 0.658, "yes_deal_accuracy": 1.0, "no_deal_accuracy": 0.0, "sample_size": 284 },
+      "final_test": null,
+      "warning": null,
+      "finalized_at": 1787121482.58
+    }
+  ],
+  "attempts_used": 1,
+  "attempts_remaining": 2,
+  "max_attempts": 3
+}
+```
 
-**Response** `200`: same shape as `/explore`'s `already_submitted` response
-above, with `status: "ok"` the first time.
+`attempts` is `[]` (not an error) if this student hasn't submitted yet.
+Each entry's `final_test` stays `null` until the session is stopped, then
+gets filled in for *every* attempt (not just the best one) — this is how a
+student sees which of their 3 tries would actually have done best on the
+data nobody saw.
 
-**Errors:** same as `/explore`.
+**Errors:** `401` bad/missing student token; `404` unknown session.
 
 ---
 
@@ -376,6 +502,7 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
     {
       "student_id": "S1",
       "full_name": "Ada Lovelace",
+      "attempt_number": 1,
       "variables": ["Industry_Travel", "Original Ask Amount"],
       "equation": "...",
       "basic_test": { "accuracy": 0.570, "...": "..." },
@@ -387,12 +514,15 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
 }
 ```
 
-`leaderboard` only contains students who have **finalized** — someone still
-exploring doesn't show up (or affect the ranking) until they commit.
-Sorted descending by `basic_test.accuracy`. `average_variables_chosen` is the
-mean size of `variables` across finalized submissions only (`0` if nobody has
-finalized yet). A non-`null` `warning` on a leaderboard entry is visible to
-the professor live — a natural moment to point out, on the spot, why that
+`leaderboard` has **one entry per student who has submitted at least one
+attempt** — not one entry per attempt. Each entry is that student's **best**
+attempt so far by `basic_test.accuracy` (see "Attempts" above); its
+`attempt_number` tells you which of their (up to 3) attempts is currently
+winning, so "attempt 1" leading doesn't necessarily mean they've only tried
+once. Sorted descending by `basic_test.accuracy`. `average_variables_chosen`
+is the mean size of `variables` across each student's best attempt (`0` if
+nobody has submitted yet). A non-`null` `warning` is visible to the
+professor live — a natural moment to point out, on the spot, why that
 student's number doesn't mean what it looks like it means.
 
 **Errors:** `403` wrong `X-Host-Token`; `404` unknown session.
@@ -401,9 +531,10 @@ student's number doesn't mean what it looks like it means.
 
 ### `POST /sessions/{code}/stop`
 
-End the session. Scores every finalized submission against the seasons 11+
-final hold-out for the first time, and returns both leaderboards. Idempotent
-— calling it again just returns the same final results.
+End the session. Scores **every attempt from every student** (not just each
+student's best) against the seasons 11+ final hold-out for the first time,
+and returns both leaderboards. Idempotent — calling it again just returns
+the same final results.
 
 **Headers:** `X-Host-Token: <token>`
 
@@ -411,13 +542,18 @@ final hold-out for the first time, and returns both leaderboards. Idempotent
 ```json
 {
   "status": "closed",
-  "basic_test_leaderboard": [ { "...": "one entry per finalized student, sorted by basic_test.accuracy desc" } ],
-  "final_test_leaderboard": [ { "...": "same entries, sorted by final_test.accuracy desc" } ]
+  "basic_test_leaderboard": [ { "...": "one entry per student (their best attempt), sorted by basic_test.accuracy desc" } ],
+  "final_test_leaderboard": [ { "...": "same students' best attempts, sorted by final_test.accuracy desc" } ]
 }
 ```
 
-Each entry has the same shape as a `finalize` response, now with `final_test`
-populated.
+Each entry has the same shape as a `finalize` response, now with
+`final_test` populated. As with the dashboard, "best attempt" is by
+basic-test accuracy — `final_test_leaderboard` is still ranking each
+student's *basic-test-best* attempt on the final-test numbers, not
+re-picking whichever attempt scores highest on the final test. (A student
+can see that latter comparison for themselves via `GET /attempts`, where
+every one of their attempts gets `final_test` filled in.)
 
 **Errors:** `403` wrong `X-Host-Token`; `404` unknown session.
 
@@ -425,7 +561,7 @@ populated.
 
 ### `GET /sessions/{code}/status`
 
-A student checks whether the session has ended, and if so, their own result.
+A student checks whether the session has ended, and if so, their results.
 
 **Headers:** `X-Student-Token: <token>`
 
@@ -438,16 +574,18 @@ A student checks whether the session has ended, and if so, their own result.
 ```json
 {
   "status": "closed",
-  "your_submission": { "...": "same shape as a finalize response, with final_test populated" },
+  "your_attempts": [ { "...": "every attempt this student made, oldest first, each with final_test now populated" } ],
   "your_basic_test_rank": 1,
   "your_final_test_rank": 1
 }
 ```
 
-`your_submission` is `null` (and the rank fields omitted from being
-meaningful) if this student never finalized before the session ended.
+`your_attempts` is `[]` (and the rank fields `null`) if this student never
+submitted before the session ended. The ranks are computed from this
+student's *best* attempt (the same one representing them on both
+leaderboards) — see "Attempts" above.
 
-By design this endpoint only reveals the calling student's own result and
+By design this endpoint only reveals the calling student's own results and
 rank, not the whole leaderboard with everyone's names — see "Scope and
 limitations" if you'd rather make results fully public to students too.
 
@@ -469,10 +607,14 @@ Worth knowing before treating this as more than a classroom tool:
   whatever name they type plus a bearer token, with no password. Fine for a
   low-stakes in-class exercise; not suitable if impersonation or grading
   integrity actually matters.
-- **No rate limiting.** `/explore` is meant to be hit repeatedly and cheaply
-  (that's the point), and nothing currently throttles a student hammering
-  it. Not a concern at classroom scale; would be worth adding for a public
-  deployment.
+- **No rate limiting.** `/finalize` is naturally self-limiting now (3
+  attempts per student, enforced server-side), but `GET /attempts` and
+  `GET /sessions/{code}/dashboard` are meant to be polled repeatedly and
+  nothing throttles a client hammering them faster than intended. Not a
+  concern at classroom scale (a few hundred students polling once a second
+  is a trivial load for a dict lookup); would be worth adding for a public
+  deployment. `/explore` (deprecated) has no cap at all, by design — it
+  never consumes an attempt.
 - **Students only see their own final result**, not a public list of
   everyone's names/scores — a privacy default, not a technical constraint.
   If you'd rather students see the full final leaderboard too, that's a

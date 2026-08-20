@@ -5,6 +5,7 @@ os.environ.setdefault("PROFESSOR_API_KEY", "test-key")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from economicsproject.server import app  # noqa: E402
+from economicsproject.sessions import MAX_ATTEMPTS  # noqa: E402
 
 client = TestClient(app)
 PROFESSOR_HEADERS = {"X-Professor-Key": "test-key"}
@@ -30,45 +31,59 @@ def test_start_session_requires_professor_key():
     assert wrong_key.status_code == 401
 
 
-def test_full_game_flow():
+def test_full_game_flow_with_three_attempts():
+    assert MAX_ATTEMPTS == 3
+
     session = _start_session()
     code, host_token = session["session_code"], session["host_token"]
 
     student = _join(code)
     token = student["student_token"]
     assert "Industry_Travel" in student["usable_columns"]
+    assert student["max_attempts"] == 3
+    headers = {"X-Student-Token": token}
 
-    explore = client.post(
-        f"/sessions/{code}/explore",
-        json={"variables": ["Industry_Travel", "Original Ask Amount"]},
-        headers={"X-Student-Token": token},
-    )
-    assert explore.status_code == 200
-    body = explore.json()
-    assert body["status"] == "ok"
-    assert 0 <= body["basic_test"]["accuracy"] <= 1
+    # attempt 1
+    first = client.post(f"/sessions/{code}/finalize", json={"variables": ["Industry_Travel"]}, headers=headers)
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["status"] == "ok"
+    assert first_body["attempt_number"] == 1
+    assert first_body["attempts_used"] == 1
+    assert first_body["attempts_remaining"] == 2
 
-    finalize = client.post(
-        f"/sessions/{code}/finalize",
-        json={"variables": ["Industry_Travel", "Original Ask Amount"]},
-        headers={"X-Student-Token": token},
-    )
-    assert finalize.status_code == 200
-    assert finalize.json()["status"] == "ok"
+    # poll /attempts -- the client is meant to trust this, not the POST response
+    polled = client.get(f"/sessions/{code}/attempts", headers=headers)
+    assert polled.status_code == 200
+    polled_body = polled.json()
+    assert polled_body["attempts_used"] == 1
+    assert len(polled_body["attempts"]) == 1
 
-    # exploring again after finalizing should say so, not silently recompute
-    again = client.post(
-        f"/sessions/{code}/explore",
-        json={"variables": ["Original Offered Equity"]},
-        headers={"X-Student-Token": token},
+    # attempts 2 and 3
+    client.post(f"/sessions/{code}/finalize", json={"variables": ["Original Ask Amount"]}, headers=headers)
+    third = client.post(
+        f"/sessions/{code}/finalize", json={"variables": ["Industry_Automotive"]}, headers=headers
     )
-    assert again.json()["status"] == "already_submitted"
+    assert third.json()["attempt_number"] == 3
+    assert third.json()["attempts_remaining"] == 0
+
+    # a 4th attempt is refused, not silently recomputed
+    fourth = client.post(f"/sessions/{code}/finalize", json={"variables": ["Guest Present"]}, headers=headers)
+    assert fourth.status_code == 200
+    fourth_body = fourth.json()
+    assert fourth_body["status"] == "attempts_exhausted"
+    assert fourth_body["attempt_number"] == 3  # unchanged, still the 3rd attempt
+    assert fourth_body["variables"] == ["Industry_Automotive"]
+
+    all_attempts = client.get(f"/sessions/{code}/attempts", headers=headers).json()
+    assert all_attempts["attempts_used"] == 3
+    assert all_attempts["attempts_remaining"] == 0
+    assert len(all_attempts["attempts"]) == 3
 
     dashboard = client.get(f"/sessions/{code}/dashboard", headers={"X-Host-Token": host_token})
     assert dashboard.status_code == 200
     dash_body = dashboard.json()
-    assert dash_body["students_finalized"] == 1
-    assert dash_body["average_variables_chosen"] == 2
+    assert dash_body["students_finalized"] == 1  # one student, not one row per attempt
 
     stop = client.post(f"/sessions/{code}/stop", headers={"X-Host-Token": host_token})
     assert stop.status_code == 200
@@ -76,11 +91,29 @@ def test_full_game_flow():
     assert len(stopped["basic_test_leaderboard"]) == 1
     assert len(stopped["final_test_leaderboard"]) == 1
 
-    student_status = client.get(f"/sessions/{code}/status", headers={"X-Student-Token": token})
+    student_status = client.get(f"/sessions/{code}/status", headers=headers)
     assert student_status.status_code == 200
     status_body = student_status.json()
     assert status_body["status"] == "closed"
+    assert len(status_body["your_attempts"]) == 3
+    assert all(a["final_test"] is not None for a in status_body["your_attempts"])
     assert status_body["your_basic_test_rank"] == 1
+
+
+def test_finalize_rejects_unusable_column():
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+
+    response = client.post(
+        f"/sessions/{code}/finalize",
+        json={"variables": ["Startup Name"]},
+        headers={"X-Student-Token": student["student_token"]},
+    )
+    assert response.status_code == 400
+    # a bad request shouldn't consume an attempt
+    attempts = client.get(f"/sessions/{code}/attempts", headers={"X-Student-Token": student["student_token"]})
+    assert attempts.json()["attempts_used"] == 0
 
 
 def test_selecting_every_category_of_a_field_is_allowed_but_warns():
@@ -92,7 +125,7 @@ def test_selecting_every_category_of_a_field_is_allowed_but_warns():
     all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
 
     response = client.post(
-        f"/sessions/{code}/explore",
+        f"/sessions/{code}/finalize",
         json={"variables": all_industries},
         headers={"X-Student-Token": student["student_token"]},
     )
@@ -103,17 +136,20 @@ def test_selecting_every_category_of_a_field_is_allowed_but_warns():
     assert "Industry" in body["warning"]
 
 
-def test_unusable_column_is_rejected():
+def test_explore_is_deprecated_but_still_works_and_does_not_consume_an_attempt():
     session = _start_session()
     code = session["session_code"]
     student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
 
     response = client.post(
-        f"/sessions/{code}/explore",
-        json={"variables": ["Startup Name"]},
-        headers={"X-Student-Token": student["student_token"]},
+        f"/sessions/{code}/explore", json={"variables": ["Industry_Travel"]}, headers=headers
     )
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+    attempts = client.get(f"/sessions/{code}/attempts", headers=headers)
+    assert attempts.json()["attempts_used"] == 0
 
 
 def test_wrong_host_token_is_forbidden():
@@ -134,7 +170,7 @@ def test_unknown_student_token_is_401():
     code = session["session_code"]
 
     response = client.post(
-        f"/sessions/{code}/explore",
+        f"/sessions/{code}/finalize",
         json={"variables": ["Industry_Travel"]},
         headers={"X-Student-Token": "not-a-real-token"},
     )

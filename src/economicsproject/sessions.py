@@ -1,11 +1,18 @@
 """In-memory game session state.
 
 A ``Session`` models one professor-hosted "server": a join code, connected
-students, their finalized variable choices, and (once stopped) the two
-final leaderboards. All state here lives only in this process's memory --
+students, their submitted attempts, and (once stopped) the two final
+leaderboards. All state here lives only in this process's memory --
 appropriate for a single classroom session, not for durability across
 restarts or multiple server processes. See API_PROTOCOL.md, "Scope and
 limitations."
+
+Students get up to ``MAX_ATTEMPTS`` submissions each, not one -- see
+API_PROTOCOL.md, "Attempts," for why. A student's "current standing" (on
+the professor's dashboard, and both final leaderboards) is always their
+*best* attempt so far by basic-test accuracy; ``attempts_for()`` returns
+every attempt they've made, which is what the "check my previous
+submissions" endpoint is for.
 """
 
 from __future__ import annotations
@@ -19,9 +26,10 @@ from dataclasses import dataclass, field
 
 from .cache import ModelCache
 from .dataset import PreparedDataset
-from .modeling import ConfusionMetrics, FittedModel, score_final_test
+from .modeling import ConfusionMetrics, score_final_test
 
 SESSION_CODE_LENGTH = 6
+MAX_ATTEMPTS = 3  # per student, per session
 
 
 class SessionError(Exception):
@@ -63,6 +71,7 @@ class Student:
 class Submission:
     student_id: str
     full_name: str
+    attempt_number: int  # 1-based, up to MAX_ATTEMPTS
     variables: list[str]
     equation: str
     basic_test: ConfusionMetrics
@@ -73,8 +82,8 @@ class Submission:
 
 @dataclass
 class FinalResults:
-    basic_test_leaderboard: list[Submission]  # sorted desc by basic_test.accuracy
-    final_test_leaderboard: list[Submission]  # sorted desc by final_test.accuracy
+    basic_test_leaderboard: list[Submission]  # each student's best attempt, sorted desc by basic_test.accuracy
+    final_test_leaderboard: list[Submission]  # each student's best attempt, sorted desc by final_test.accuracy
     closed_at: float
 
 
@@ -90,7 +99,7 @@ class Session:
         self._dataset = dataset
         self._lock = threading.RLock()
         self._students: dict[str, Student] = {}  # token -> Student
-        self._submissions: dict[str, Submission] = {}  # token -> Submission
+        self._attempts: dict[str, list[Submission]] = {}  # token -> attempts, oldest first
 
     def join(self, full_name: str) -> Student:
         full_name = full_name.strip()
@@ -111,81 +120,118 @@ class Session:
             raise UnknownStudentError()
         return student
 
-    def submission_for(self, token: str) -> Submission | None:
+    def attempts_for(self, token: str) -> list[Submission]:
+        """Every attempt this student has made so far, oldest first."""
         with self._lock:
-            return self._submissions.get(token)
+            return list(self._attempts.get(token, []))
 
-    def explore(self, token: str, variables: list[str]) -> tuple[FittedModel | None, bool]:
-        """Returns (fitted_model, already_submitted)."""
+    def best_attempt_for(self, token: str) -> Submission | None:
+        """This student's current standing: their highest basic-test-accuracy
+        attempt so far, or None if they haven't submitted at all."""
+        with self._lock:
+            attempts = self._attempts.get(token, [])
+            return max(attempts, key=lambda sub: sub.basic_test.accuracy) if attempts else None
+
+    def explore(self, token: str, variables: list[str]) -> tuple[object | None, str]:
+        """Deprecated (see API_PROTOCOL.md, "Attempts") but left functional
+        for rollback. Returns (fitted_model, status), status one of "ok" /
+        "attempts_exhausted". Doesn't consume an attempt."""
         self.student_for_token(token)
         with self._lock:
-            if token in self._submissions:
-                return None, True
+            used = len(self._attempts.get(token, []))
+        if used >= MAX_ATTEMPTS:
+            return None, "attempts_exhausted"
         if self.status != "open":
             raise SessionClosedError(self.code)
-        return self._cache.get_or_fit(variables), False
+        return self._cache.get_or_fit(variables), "ok"
 
-    def finalize(self, token: str, variables: list[str]) -> tuple[Submission, bool]:
-        """Returns (submission, already_submitted). Idempotent: a second call
-        just returns the original submission, ignoring any new variables."""
+    def finalize(self, token: str, variables: list[str]) -> tuple[Submission, str]:
+        """Submit an attempt. Returns (submission, status), status one of
+        "ok" (a new attempt was recorded) or "attempts_exhausted" (all
+        MAX_ATTEMPTS used already -- returns their most recent attempt
+        unchanged). Raises ValueError for unusable/degenerate variables
+        (via fit_logit_model's own validation) -- but only when an attempt
+        would actually be spent; an exhausted student's bad input is never
+        validated, since it wouldn't be used anyway.
+        """
         student = self.student_for_token(token)
         with self._lock:
-            existing = self._submissions.get(token)
-            if existing is not None:
-                return existing, True
+            existing = self._attempts.get(token, [])
+            if len(existing) >= MAX_ATTEMPTS:
+                return existing[-1], "attempts_exhausted"
         if self.status != "open":
             raise SessionClosedError(self.code)
 
+        # The fit itself (and its validation) happens outside the lock so a
+        # slow fit doesn't block other students; the count is re-checked
+        # and the attempt committed atomically below.
         fitted = self._cache.get_or_fit(variables)
-        submission = Submission(
-            student_id=student.student_id,
-            full_name=student.full_name,
-            variables=sorted(set(variables)),
-            equation=fitted.equation,
-            basic_test=fitted.basic_test,
-            warning=fitted.warning,
-        )
+
         with self._lock:
-            existing = self._submissions.get(token)
-            if existing is not None:
-                return existing, True
-            self._submissions[token] = submission
-            return submission, False
+            existing = self._attempts.setdefault(token, [])
+            if len(existing) >= MAX_ATTEMPTS:
+                return existing[-1], "attempts_exhausted"
+            if self.status != "open":
+                raise SessionClosedError(self.code)
+            submission = Submission(
+                student_id=student.student_id,
+                full_name=student.full_name,
+                attempt_number=len(existing) + 1,
+                variables=sorted(set(variables)),
+                equation=fitted.equation,
+                basic_test=fitted.basic_test,
+                warning=fitted.warning,
+            )
+            existing.append(submission)
+            return submission, "ok"
 
     def dashboard(self) -> dict:
-        """What the professor's periodic poll receives."""
+        """What the professor's periodic poll receives. Each leaderboard
+        entry is a student's best attempt so far, not one row per attempt."""
         with self._lock:
             students = list(self._students.values())
-            submissions = list(self._submissions.values())
+            best = [
+                max(attempts, key=lambda sub: sub.basic_test.accuracy)
+                for attempts in self._attempts.values()
+                if attempts
+            ]
 
-        leaderboard = sorted(submissions, key=lambda sub: sub.basic_test.accuracy, reverse=True)
-        variable_counts = [len(sub.variables) for sub in submissions]
+        leaderboard = sorted(best, key=lambda sub: sub.basic_test.accuracy, reverse=True)
+        variable_counts = [len(sub.variables) for sub in best]
         return {
             "status": self.status,
             "students_online": [{"student_id": st.student_id, "full_name": st.full_name} for st in students],
             "students_total": len(students),
-            "students_finalized": len(submissions),
+            "students_finalized": len(best),
             "average_variables_chosen": (sum(variable_counts) / len(variable_counts)) if variable_counts else 0.0,
             "leaderboard": leaderboard,
         }
 
     def close(self) -> FinalResults:
-        """End the session and score every finalized submission against the
-        seasons 11+ final hold-out for the first time. Idempotent."""
+        """End the session and score *every* attempt (not just each
+        student's best) against the seasons 11+ final hold-out for the
+        first time. Idempotent."""
         with self._lock:
             if self.final_results is not None:
                 return self.final_results
             self.status = "closed"
             self.closed_at = time.time()
-            submissions = list(self._submissions.values())
+            all_attempts = [sub for attempts in self._attempts.values() for sub in attempts]
 
-        for submission in submissions:
+        for submission in all_attempts:
             fitted = self._cache.get_or_fit(submission.variables)
             submission.final_test = score_final_test(fitted, self._dataset)
 
-        basic_leaderboard = sorted(submissions, key=lambda sub: sub.basic_test.accuracy, reverse=True)
+        with self._lock:
+            best = [
+                max(attempts, key=lambda sub: sub.basic_test.accuracy)
+                for attempts in self._attempts.values()
+                if attempts
+            ]
+
+        basic_leaderboard = sorted(best, key=lambda sub: sub.basic_test.accuracy, reverse=True)
         final_leaderboard = sorted(
-            (sub for sub in submissions if sub.final_test and sub.final_test.sample_size),
+            (sub for sub in best if sub.final_test and sub.final_test.sample_size),
             key=lambda sub: sub.final_test.accuracy,
             reverse=True,
         )

@@ -18,8 +18,10 @@ See `../client/README.md`, "Design origin," for what the styled one adds.
   stop the session, and see both final leaderboards
 - `/join` — student enters a session code + full name
 - `/play` — student checks off variables (one checkbox per usable column,
-  including every individual one-hot category), explores/finalizes, and
-  (once the professor stops the session) sees their own final result
+  including every individual one-hot category) and submits up to 3 scored
+  attempts (`POST /finalize`), with a running "Your attempts" table fed by
+  `GET /attempts`; once the professor stops the session, each attempt also
+  shows its final-test result
 
 ## Running
 
@@ -46,6 +48,22 @@ swap in this directory and its port (5001).
 
 Requires the backend's CORS to allow this page's origin (`CORS_ORIGINS` env
 var on the backend; the default `"*"` already covers this).
+
+## Attempts, not live exploring
+
+`POST /sessions/{code}/explore` still exists on the backend (kept, marked
+deprecated, for rollback) but this client never calls it — there's no live
+fit-as-you-check-boxes preview. `play.js` only calls `POST /finalize`
+("Submit attempt"), which is scored for real and consumes one of 3
+attempts. After that POST, the page doesn't trust the response by itself:
+it disables the form and polls `GET /sessions/{code}/attempts` every 1
+second until the returned attempt count has actually increased, then
+re-enables the form (or shows the exhausted banner on the 3rd). This
+guards against a dropped HTTP response after the attempt was already
+consumed server-side. It's a client-side-only lock — the server enforces
+the 3-attempt cap regardless, not "wait for a poll before resubmitting."
+See the repo root `CLAUDE.md` and `API_PROTOCOL.md`, "Attempts," for the
+full rationale.
 
 ## Notes
 

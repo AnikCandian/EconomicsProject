@@ -169,7 +169,7 @@ function renderLeaderboardRows(containerId, entries, metricKey, showTime) {
         <div class="mon-avatar">${initials(entry.full_name)}</div>
         <div style="min-width:0">
           <div class="mon-row__name">${entry.full_name}${warnIcon}</div>
-          <div class="mon-row__spec">${entry.variables.join(", ")}</div>
+          <div class="mon-row__spec">best of attempt ${entry.attempt_number} · ${entry.variables.join(", ")}</div>
         </div>
       </div>
       <div class="mon-row__score">${fmtPct(metrics.accuracy)}</div>
