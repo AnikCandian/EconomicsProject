@@ -1,0 +1,145 @@
+:root {
+  --border: #ccc;
+  --banner-bg: #fff3cd;
+  --banner-border: #ffe08a;
+  --error: #b00020;
+  color-scheme: light dark;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 0 1rem 3rem;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+header a {
+  text-decoration: none;
+  color: inherit;
+}
+
+header h1 {
+  font-size: 1.2rem;
+  margin: 0;
+}
+
+nav a {
+  margin-left: 1rem;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.role-cards {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  flex: 1 1 250px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.card:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+fieldset {
+  margin-bottom: 1rem;
+}
+
+.checkbox-option {
+  display: block;
+  margin: 0.25rem 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 1.5rem;
+}
+
+th,
+td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.error {
+  color: var(--error);
+}
+
+.banner {
+  background: var(--banner-bg);
+  border: 1px solid var(--banner-border);
+  color: #333;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.warning-banner {
+  background: #fdecea;
+  border-color: #f5c2c0;
+  font-weight: 600;
+}
+
+code {
+  font-size: 0.85em;
+}
+
+pre {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+input[type="text"],
+input[type="password"] {
+  display: block;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0.4rem;
+  width: 100%;
+  max-width: 300px;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  margin: 0.5rem 0.5rem 0.5rem 0;
+  cursor: pointer;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+}

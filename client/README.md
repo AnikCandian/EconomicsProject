@@ -9,6 +9,12 @@ The visual design is a reimplementation of a "Deal Probability" mockup built
 in Claude Design (claude.ai/design) — see "Design origin" below for what
 came from the mockup, what changed, and why.
 
+A plainer, minimal-styling client also lives at
+[`../client_barebones/`](../client_barebones/) — same pages, same API, no
+design system on top. Handy for eyeballing raw API responses, or as a
+starting point for a different design. Both can run at once (this one on
+port 5000, the barebones one on 5001 by default).
+
 ## Pages
 
 - `/` — landing: student join (session code + name), or an administrator
@@ -39,6 +45,61 @@ FastAPI backend actually runs.
 
 Requires the backend's CORS to allow this page's origin (`CORS_ORIGINS` env
 var on the backend; the default `"*"` already covers this).
+
+## Running for a real classroom (multiple devices)
+
+Everything above defaults to `127.0.0.1`, which only means "this machine" —
+fine for testing solo, but a phone's `127.0.0.1` is the phone itself, not
+your laptop. Nothing in the code needs to change for students to join from
+their own devices; you just need three things at startup:
+
+1. **Find your machine's LAN IP** (the address other devices on the same
+   Wi-Fi can reach you at):
+   ```bash
+   # macOS
+   ipconfig getifaddr en0
+   # Linux
+   hostname -I | awk '{print $1}'
+   # Windows (PowerShell)
+   (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"})[0].IPAddress
+   ```
+   Say it comes back `192.168.1.50`.
+
+2. **Bind both servers to all interfaces, not just localhost** — `HOST=0.0.0.0`
+   tells them to accept connections from other devices, not only from your
+   own machine:
+   ```bash
+   # terminal 1 -- the backend
+   HOST=0.0.0.0 PROFESSOR_API_KEY=<a real secret> python -m economicsproject.main
+
+   # terminal 2 -- this client, pointed at the backend's LAN address
+   cd client
+   HOST=0.0.0.0 API_BASE_URL=http://192.168.1.50:8000 python app.py
+   ```
+   The `API_BASE_URL` is the one people miss: it's baked into the page and
+   used by *every student's own browser*, so it has to be an address
+   *their* device can reach — your LAN IP, not `127.0.0.1`.
+
+3. **Share the LAN address, not `127.0.0.1`**: students (and the professor,
+   from their own laptop/phone) go to `http://192.168.1.50:5000/` — same
+   Wi-Fi network required, since a home/classroom router won't route
+   `192.168.x.x` from outside it.
+
+Notes and gotchas:
+
+- **Firewall prompts.** The first time you run this, macOS/Windows will
+  likely ask whether to allow incoming connections for `python` — allow it,
+  or other devices will silently fail to connect.
+- **`PROFESSOR_API_KEY` is the only real gate here.** Anyone on the same
+  Wi-Fi can reach the backend directly (not just through this client), so
+  don't leave it as a guessable default for anything beyond a quick test.
+- **This is still a LAN-only setup**, not a public deployment — it works
+  because everyone's on the same network the servers are bound to. Serving
+  this to students outside that network (a different building, a phone on
+  cellular data) needs a real hosting setup (a cloud VM, a tunnel like
+  ngrok/Cloudflare Tunnel, etc.) and is out of scope for this dev server.
+- Same steps apply to [`../client_barebones/`](../client_barebones/) — just
+  substitute its directory and default port (5001).
 
 ## Design origin
 
