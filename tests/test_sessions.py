@@ -131,6 +131,49 @@ def test_close_scores_every_attempt_and_builds_two_leaderboards_from_best_attemp
     assert final_scores == sorted(final_scores, reverse=True)
 
 
+def test_finalize_rejects_full_category_selection_without_consuming_an_attempt(store):
+    from economicsproject.dataset import CATEGORY_VALUES
+
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
+
+    invalid, finalize_status = session.finalize(student.token, all_industries)
+
+    assert finalize_status == "invalid_selection"
+    assert invalid.culprit_categories == ["Industry"]
+    assert "Industry" in invalid.message
+    assert session.attempts_for(student.token) == []  # no attempt recorded
+    assert session.invalid_selection_for(student.token) is invalid
+
+    # a normal attempt afterward still works and is attempt #1
+    submission, ok_status = session.finalize(student.token, ["Industry_Travel"])
+    assert ok_status == "ok"
+    assert submission.attempt_number == 1
+
+
+def test_exhaustion_is_checked_before_invalid_selection(store):
+    from economicsproject.dataset import CATEGORY_VALUES
+
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    for variables in (["Industry_Travel"], ["Original Ask Amount"], ["Industry_Automotive"]):
+        session.finalize(student.token, variables)
+
+    all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
+    result, status = session.finalize(student.token, all_industries)
+
+    # an already-exhausted student's selection is never even looked at
+    assert status == "attempts_exhausted"
+    assert session.invalid_selection_for(student.token) is None
+
+
+def test_invalid_selection_for_is_none_before_any_rejection(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    assert session.invalid_selection_for(student.token) is None
+
+
 def test_close_is_idempotent(store):
     session = store.create()
     session.join("Ada Lovelace")

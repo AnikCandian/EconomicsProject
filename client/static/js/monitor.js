@@ -163,12 +163,11 @@ function renderLeaderboardRows(containerId, entries, metricKey, showTime) {
     const metrics = entry[metricKey] || {};
     const row = document.createElement("div");
     row.className = "mon-row";
-    const warnIcon = entry.warning ? `<span class="mon-row__warn" title="${escapeAttr(entry.warning)}"> ⚠️</span>` : "";
     row.innerHTML = `
       <div class="mon-row__user">
         <div class="mon-avatar">${initials(entry.full_name)}</div>
         <div style="min-width:0">
-          <div class="mon-row__name">${entry.full_name}${warnIcon}</div>
+          <div class="mon-row__name">${entry.full_name}</div>
           <div class="mon-row__spec">best of attempt ${entry.attempt_number} · ${entry.variables.join(", ")}</div>
         </div>
       </div>
@@ -182,10 +181,6 @@ function renderLeaderboardRows(containerId, entries, metricKey, showTime) {
 
 function initials(name) {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).slice(0, 2).join("");
-}
-
-function escapeAttr(text) {
-  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 function timeAgo(unixSeconds) {

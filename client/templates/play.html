@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Model builder — Deal Probability{% endblock %}
+{% block title %}Model builder — Quinn Labs{% endblock %}
 {% block body %}
 <div class="app-header">
   <div class="app-brand">
     <div class="app-brand__mark"></div>
-    <div class="app-brand__name">Deal Probability</div>
+    <div class="app-brand__name">Quinn Labs</div>
   </div>
   <div class="app-tab">Model builder</div>
   <div class="app-user">
@@ -25,7 +25,7 @@
       <div class="builder-summary__panel">
         <div class="eyebrow">Latest attempt · logit link</div>
         <div class="equation-box">
-          <p id="rail-warning-inline" class="rail-warning" hidden></p>
+          <p id="rail-invalid-selection-inline" class="rail-invalid" hidden></p>
           <div class="split-bar-row">
             <span class="split-bar-row__label">Yes-deal</span>
             <div class="split-bar-track"><div class="split-bar-fill" id="yes-bar" style="width:0%"></div></div>
@@ -72,7 +72,7 @@
 
   <div class="builder-rail">
     <div class="builder-rail__inner">
-      <p id="rail-warning" class="rail-warning" hidden></p>
+      <p id="rail-invalid-selection" class="rail-invalid" hidden></p>
       <div class="eyebrow">Basic-test accuracy · seasons 8–10</div>
       <div class="rail-score">
         <div class="rail-score__num" id="rail-pct">—</div>

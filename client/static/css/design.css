@@ -241,7 +241,7 @@ input { font-family: inherit; }
 .rail-stat-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
 .rail-stat-row span:first-child { color: var(--color-neutral-700); }
 .rail-stat-row span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
-.rail-warning {
+.rail-invalid {
   border-left: 4px solid var(--color-accent); background: var(--color-accent-100);
   color: var(--color-accent-800); padding: 10px 12px; font-size: 12px; line-height: 1.5; margin-bottom: 16px;
 }

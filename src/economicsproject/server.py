@@ -32,6 +32,7 @@ from .modeling import ConfusionMetrics, ModelFitError
 from .sessions import (
     MAX_ATTEMPTS,
     InvalidHostTokenError,
+    InvalidSelection,
     SessionClosedError,
     SessionNotFoundError,
     SessionStore,
@@ -128,6 +129,15 @@ def _submission_dict(submission: Submission) -> dict:
     }
 
 
+def _invalid_selection_dict(invalid: InvalidSelection) -> dict:
+    return {
+        "variables": invalid.variables,
+        "culprit_categories": invalid.culprit_categories,
+        "message": invalid.message,
+        "attempted_at": invalid.attempted_at,
+    }
+
+
 def _rank_of(submission: Submission | None, leaderboard: list[Submission]) -> int | None:
     if submission is None:
         return None
@@ -215,9 +225,23 @@ def finalize(code: str, body: schemas.FinalizeRequest, x_student_token: str = He
     session = _store.get(code)
     session.student_for_token(x_student_token)  # raises UnknownStudentError -> 401 if invalid
     try:
-        submission, finalize_status = session.finalize(x_student_token, body.variables)
+        result, finalize_status = session.finalize(x_student_token, body.variables)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    if finalize_status == "invalid_selection":
+        # Every category of a one-hot field was selected at once (the
+        # dummy-variable trap) -- rejected before any fit, no attempt spent.
+        attempts_used = len(session.attempts_for(x_student_token))
+        return {
+            "status": "invalid_selection",
+            "attempts_used": attempts_used,
+            "attempts_remaining": max(0, MAX_ATTEMPTS - attempts_used),
+            "max_attempts": MAX_ATTEMPTS,
+            **_invalid_selection_dict(result),
+        }
+
+    submission = result
     attempts_used = submission.attempt_number
     return {
         "status": finalize_status,  # "ok" | "attempts_exhausted"
@@ -248,11 +272,18 @@ def attempts(code: str, x_student_token: str = Header(...)):
 
 @app.get("/sessions/{code}/status")
 def session_status(code: str, x_student_token: str = Header(...)):
+    """Also carries ``last_invalid_selection`` (null if none yet) -- this is
+    the endpoint a client polls to learn a /finalize call was rejected for
+    selecting every category of a one-hot field, in case the /finalize
+    response itself never arrived (see API_PROTOCOL.md, "Attempts")."""
     session = _store.get(code)
     session.student_for_token(x_student_token)  # raises UnknownStudentError -> 401 if invalid
 
+    invalid = session.invalid_selection_for(x_student_token)
+    invalid_dict = _invalid_selection_dict(invalid) if invalid else None
+
     if session.status == "open":
-        return {"status": "open"}
+        return {"status": "open", "last_invalid_selection": invalid_dict}
 
     best = session.best_attempt_for(x_student_token)
     return {
@@ -260,4 +291,5 @@ def session_status(code: str, x_student_token: str = Header(...)):
         "your_attempts": [_submission_dict(sub) for sub in session.attempts_for(x_student_token)],
         "your_basic_test_rank": _rank_of(best, session.final_results.basic_test_leaderboard),
         "your_final_test_rank": _rank_of(best, session.final_results.final_test_leaderboard),
+        "last_invalid_selection": invalid_dict,
     }

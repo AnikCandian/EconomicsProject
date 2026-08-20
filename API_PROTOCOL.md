@@ -201,52 +201,92 @@ returns *every* attempt (that's the whole point of it) so a student can see
 exactly how each of their 3 tries actually did, including which one
 strategy would have scored best on the (eventually revealed) final test.
 
+**Rejected selections don't consume an attempt either.** `POST /finalize`
+has a third outcome besides `"ok"` and `"attempts_exhausted"`:
+`"invalid_selection"` — a student selected every category of one or more
+one-hot fields at once (the dummy-variable trap; see "Degenerate fits"
+below for why that's unsolvable, not just unwise). The exhaustion count is
+still checked first (an already-exhausted student's selection is never
+even looked at); an `invalid_selection` is then caught right after, before
+any fit is attempted, so a still-eligible student never loses an attempt to
+it. Both shipped clients
+also check this themselves before ever sending the request, so in the
+normal case a student never gets to POST it at all — but the server
+enforces the same rule independently in case that client-side check is
+stale or bypassed. Because this can also arrive via a lost `/finalize`
+response, the same client polling pattern above applies: `GET /status`'s
+`last_invalid_selection` field (see its endpoint doc below) is how a client
+learns a submission was rejected even if it never saw the POST response
+that said so.
+
 ## Degenerate fits
 
 A student can select every category of the same one-hot field at once (e.g.
-all 16 `Industry_*` columns). This is allowed on purpose rather than
-rejected — it's a genuinely instructive mistake, and blocking it teaches
-nothing. But it does make the design matrix perfectly multicollinear: those
-16 dummy columns sum to 1 for every row, exactly duplicating the intercept
-column. That has a real consequence worth understanding, not just avoiding.
+all 16 `Industry_*` columns). This makes the design matrix perfectly
+multicollinear: those 16 dummy columns sum to 1 for every row, exactly
+duplicating the intercept column — there's no unique best-fit answer for a
+model like that (see below for the numerical detail).
 
-**What actually happens, numerically:** the fit doesn't error out. statsmodels
-happily reports "Optimization terminated successfully" and hands back an
-equation that looks completely normal. But there's no unique solution —
-shift the intercept by any constant `c` and every one of that field's
-coefficients by `-c`, and you get *identical* predictions for every row
-(exactly one dummy is always 1, so the `+c`/`-c` always cancels). That's an
-entire line of equally-"correct" coefficient vectors, not one answer.
-Empirically: Newton's method, BFGS, and L-BFGS each converge to *different*
-numbers on the exact same data (we checked — predicted probabilities
-differed by up to 3.5 percentage points between solvers), standard errors
-come back `NaN`, and the design matrix's condition number is on the order of
-10¹⁵ (numerically singular).
-
-So the backend detects this directly (design-matrix rank deficiency via
-`numpy.linalg.matrix_rank`, not by pattern-matching "did they pick every
-category" — the same detection catches any combination of variables that
-happens to be exactly collinear, not just this one anticipated case) and
-attaches a `warning` string to the response explaining it. `warning` is
-`null` on every normal fit, and appears on `explore`/`finalize` responses
-and on leaderboard entries (so a professor can see, live, if a student's
-model is degenerate):
+**In the actual student game, `POST /finalize` rejects this outright** —
+see "Attempts" above. `status: "invalid_selection"`, no fit attempted, no
+attempt consumed, and a short explanation in `message`:
 
 ```json
 {
-  "status": "ok",
+  "status": "invalid_selection",
+  "attempts_used": 0,
+  "attempts_remaining": 3,
+  "max_attempts": 3,
   "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
-  "equation": "logit(P(Got Deal)) = -0.0259 + 0.3135 * Industry_Automotive + ...",
-  "basic_test": { "accuracy": 0.560, "yes_deal_accuracy": 0.695, "no_deal_accuracy": 0.299, "sample_size": 284 },
-  "warning": "This variable set is perfectly multicollinear: every category of 'Industry' was selected at once, so those dummy columns sum to 1 for every row -- exactly duplicating the intercept. There is no unique best-fit answer -- the coefficients below are just one arbitrary point among infinitely many that score identically. Different solvers (or even the same solver from a different starting point) can return different numbers for the exact same data, and standard errors are undefined. Treat this as a demonstration of a broken fit, not a usable model."
+  "culprit_categories": ["Industry"],
+  "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+  "attempted_at": 1732500000.0
 }
 ```
+
+This used to be allowed-with-a-warning instead — the fit would go through
+and a `warning` string on the response explained why the coefficients
+weren't a real answer. That taught nothing in practice (nobody but the
+professor reads a multicollinearity writeup mid-game) and cost the student
+a scored attempt for a model that was never usable, so it was replaced with
+an outright rejection that doesn't touch the attempt count. The deprecated
+`POST /explore` endpoint (and `modeling.fit_logit_model()` used directly,
+outside a game session — see `CLAUDE.md`, "Running a model standalone")
+still exhibit the old behavior unchanged: they fit it anyway and attach a
+`warning` string, since seeing *why* the fit breaks is a useful
+demonstration there, just not something that should cost a student a
+scored attempt in the real game.
+
+**What actually happens, numerically, when it's fit anyway (`/explore`, or
+`fit_logit_model()` called directly):** the fit doesn't error out.
+statsmodels happily reports "Optimization terminated successfully" and
+hands back an equation that looks completely normal. But there's no unique
+solution — shift the intercept by any constant `c` and every one of that
+field's coefficients by `-c`, and you get *identical* predictions for every
+row (exactly one dummy is always 1, so the `+c`/`-c` always cancels).
+That's an entire line of equally-"correct" coefficient vectors, not one
+answer. Empirically: Newton's method, BFGS, and L-BFGS each converge to
+*different* numbers on the exact same data (we checked — predicted
+probabilities differed by up to 3.5 percentage points between solvers),
+standard errors come back `NaN`, and the design matrix's condition number
+is on the order of 10¹⁵ (numerically singular).
+
+`modeling.describe_collinearity()` detects this directly (design-matrix
+rank deficiency via `numpy.linalg.matrix_rank`, not by pattern-matching
+"did they pick every category" — the same detection catches any
+combination of variables that happens to be exactly collinear, not just
+this one anticipated case) and attaches a `warning` string to the fit
+result explaining it. `warning` is `null` on every normal fit and still
+appears on `/explore` responses when triggered; it's effectively always
+`null` on `/finalize`/`/attempts`/leaderboard entries now, since
+`/finalize` rejects the one case (full-category selection) that could
+trigger it before any fit happens.
 
 (A genuinely unfittable design matrix — statsmodels hard-fails rather than
 silently returning an arbitrary answer — is the one case that *does* still
 come back as an error: `400` with a `detail` explaining the same thing. This
 is rare; every case we've tried, including the full-category one above,
-returns a degenerate-but-present result instead.)
+returns a degenerate-but-present result instead when it's fit at all.)
 
 ## Model caching
 
@@ -272,10 +312,15 @@ This API has no push channel. Two consequences:
    `409` they'll get on their next `/finalize` call after `/stop` — there's
    no way for the backend to interrupt them mid-session. Use
    `GET /sessions/{code}/status` for this; poll it however often feels right
-   (a few seconds is plenty). This is separate from the *much* tighter
-   ~1-second poll of `GET /sessions/{code}/attempts` right after submitting
-   an attempt — see "Attempts" above; that one exists for confirmation, not
-   for detecting the session ending.
+   (a few seconds is plenty) for that purpose alone. Right after submitting
+   an attempt, though, both shipped clients poll `GET /sessions/{code}/attempts`
+   *and* `GET /sessions/{code}/status` together on the same *much* tighter
+   ~1-second interval — `/attempts` to confirm a successful submission
+   landed, `/status`'s `last_invalid_selection` to confirm a rejected one
+   did too — see "Attempts" above. That tight interval is for confirming
+   what just happened, not for detecting the session ending; the loose,
+   several-seconds `/status` poll runs the whole time regardless and covers
+   that.
 
 If you need instant push (e.g. a student's screen should update the moment
 the professor stops the game, not next-poll), that requires WebSockets or
@@ -431,16 +476,35 @@ attempt is returned unchanged, a 4th is never recorded):
 }
 ```
 
+**Response** `200` (rejected: every category of one or more one-hot fields
+was selected at once — see "Degenerate fits" below. No attempt was
+consumed; `attempts_used`/`attempts_remaining` reflect this student's
+*prior* state, unchanged):
+```json
+{
+  "status": "invalid_selection",
+  "attempts_used": 0,
+  "attempts_remaining": 3,
+  "max_attempts": 3,
+  "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
+  "culprit_categories": ["Industry"],
+  "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+  "attempted_at": 1732500000.0
+}
+```
+
 `final_test` stays `null` on every attempt until the session is stopped —
 this is a genuine hold-out; nothing here reveals it early.
 
 **Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`, or if
 statsmodels itself fails to fit at all (rare -- see "Degenerate fits"). Note:
-an exhausted student's `variables` are never even validated (there's no
-attempt left to spend on them), so a bad column list from a student with 0
-attempts remaining still comes back `attempts_exhausted`, not `400`. `401`
-bad/missing student token; `404` unknown session; `409` session already
-closed (and this student hadn't used all their attempts before it closed).
+an exhausted student's `variables` are never even looked at -- neither
+validated nor checked for the dummy-variable trap (there's no attempt left
+to spend on them) -- so a bad or invalid column list from a student with 0
+attempts remaining still comes back `attempts_exhausted`, not `400` or
+`invalid_selection`. `401` bad/missing student token; `404` unknown
+session; `409` session already closed (and this student hadn't used all
+their attempts before it closed).
 
 ---
 
@@ -475,6 +539,9 @@ for why it's the trustworthy source of truth, not the POST response.
 ```
 
 `attempts` is `[]` (not an error) if this student hasn't submitted yet.
+A rejected (`invalid_selection`) submission never shows up here, by
+design — it never became an attempt. `GET /status`'s `last_invalid_selection`
+below is where a client checks for that instead.
 Each entry's `final_test` stays `null` until the session is stopped, then
 gets filled in for *every* attempt (not just the best one) — this is how a
 student sees which of their 3 tries would actually have done best on the
@@ -562,12 +629,31 @@ every one of their attempts gets `final_test` filled in.)
 ### `GET /sessions/{code}/status`
 
 A student checks whether the session has ended, and if so, their results.
+Also carries `last_invalid_selection` in every response, open or closed —
+this is the endpoint a client polls to learn a `/finalize` submission was
+rejected for selecting every category of a one-hot field, in case the
+`/finalize` response itself never arrived (see "Attempts" above).
 
 **Headers:** `X-Student-Token: <token>`
 
 **Response** `200` while open:
 ```json
-{ "status": "open" }
+{ "status": "open", "last_invalid_selection": null }
+```
+
+Or, if this student's most recent `/finalize` call (or their most recent
+one at the time this was polled) was rejected as a dummy-variable-trap
+selection:
+```json
+{
+  "status": "open",
+  "last_invalid_selection": {
+    "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
+    "culprit_categories": ["Industry"],
+    "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+    "attempted_at": 1732500000.0
+  }
+}
 ```
 
 **Response** `200` once closed:
@@ -576,7 +662,8 @@ A student checks whether the session has ended, and if so, their results.
   "status": "closed",
   "your_attempts": [ { "...": "every attempt this student made, oldest first, each with final_test now populated" } ],
   "your_basic_test_rank": 1,
-  "your_final_test_rank": 1
+  "your_final_test_rank": 1,
+  "last_invalid_selection": null
 }
 ```
 
@@ -584,6 +671,12 @@ A student checks whether the session has ended, and if so, their results.
 submitted before the session ended. The ranks are computed from this
 student's *best* attempt (the same one representing them on both
 leaderboards) — see "Attempts" above.
+
+`last_invalid_selection` only ever holds the single most recent rejection
+(not a history of every one) — a client compares its `attempted_at`
+against the time it started waiting, so it only reacts to a rejection that
+actually corresponds to its own pending submission, not a stale one from
+earlier in the session.
 
 By design this endpoint only reveals the calling student's own results and
 rank, not the whole leaderboard with everyone's names — see "Scope and

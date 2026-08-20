@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 
 from .cache import ModelCache
-from .dataset import PreparedDataset
+from .dataset import PreparedDataset, dummy_variable_trap_message, fully_selected_categories, validate_variable_selection
 from .modeling import ConfusionMetrics, score_final_test
 
 SESSION_CODE_LENGTH = 6
@@ -81,6 +81,22 @@ class Submission:
 
 
 @dataclass
+class InvalidSelection:
+    """A rejected finalize() attempt: every category of one or more one-hot
+    fields was selected at once (the dummy-variable trap -- see
+    dataset.fully_selected_categories). Doesn't consume an attempt. Recorded
+    per-student so GET /status can surface it to a client whose /finalize
+    response never arrived -- the same lost-response problem that
+    GET /attempts solves for successful submissions (see API_PROTOCOL.md,
+    "Attempts")."""
+
+    variables: list[str]
+    culprit_categories: list[str]
+    message: str
+    attempted_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class FinalResults:
     basic_test_leaderboard: list[Submission]  # each student's best attempt, sorted desc by basic_test.accuracy
     final_test_leaderboard: list[Submission]  # each student's best attempt, sorted desc by final_test.accuracy
@@ -100,6 +116,7 @@ class Session:
         self._lock = threading.RLock()
         self._students: dict[str, Student] = {}  # token -> Student
         self._attempts: dict[str, list[Submission]] = {}  # token -> attempts, oldest first
+        self._invalid_selections: dict[str, InvalidSelection] = {}  # token -> most recent rejection
 
     def join(self, full_name: str) -> Student:
         full_name = full_name.strip()
@@ -132,6 +149,14 @@ class Session:
             attempts = self._attempts.get(token, [])
             return max(attempts, key=lambda sub: sub.basic_test.accuracy) if attempts else None
 
+    def invalid_selection_for(self, token: str) -> InvalidSelection | None:
+        """This student's most recent rejected (dummy-variable-trap)
+        finalize() attempt, if any -- what GET /status surfaces so a client
+        can learn a submission was rejected even if the /finalize response
+        itself never arrived."""
+        with self._lock:
+            return self._invalid_selections.get(token)
+
     def explore(self, token: str, variables: list[str]) -> tuple[object | None, str]:
         """Deprecated (see API_PROTOCOL.md, "Attempts") but left functional
         for rollback. Returns (fitted_model, status), status one of "ok" /
@@ -145,14 +170,19 @@ class Session:
             raise SessionClosedError(self.code)
         return self._cache.get_or_fit(variables), "ok"
 
-    def finalize(self, token: str, variables: list[str]) -> tuple[Submission, str]:
-        """Submit an attempt. Returns (submission, status), status one of
-        "ok" (a new attempt was recorded) or "attempts_exhausted" (all
-        MAX_ATTEMPTS used already -- returns their most recent attempt
-        unchanged). Raises ValueError for unusable/degenerate variables
-        (via fit_logit_model's own validation) -- but only when an attempt
-        would actually be spent; an exhausted student's bad input is never
-        validated, since it wouldn't be used anyway.
+    def finalize(self, token: str, variables: list[str]) -> tuple[Submission | InvalidSelection, str]:
+        """Submit an attempt. Returns (result, status), status one of:
+        - "ok" -- a new Submission was recorded.
+        - "attempts_exhausted" -- all MAX_ATTEMPTS used already; returns
+          their most recent Submission, unchanged. Checked first, before
+          any validation, so an exhausted student's input is never even
+          looked at -- it wouldn't be used anyway.
+        - "invalid_selection" -- every category of one or more one-hot
+          fields was selected at once (the dummy-variable trap). Rejected
+          before any fit is attempted and doesn't consume an attempt. See
+          dataset.fully_selected_categories and API_PROTOCOL.md,
+          "Attempts."
+        Raises ValueError for any other unusable variable name.
         """
         student = self.student_for_token(token)
         with self._lock:
@@ -162,9 +192,21 @@ class Session:
         if self.status != "open":
             raise SessionClosedError(self.code)
 
-        # The fit itself (and its validation) happens outside the lock so a
-        # slow fit doesn't block other students; the count is re-checked
-        # and the attempt committed atomically below.
+        validate_variable_selection(variables)
+        culprits = fully_selected_categories(variables)
+        if culprits:
+            invalid = InvalidSelection(
+                variables=sorted(set(variables)),
+                culprit_categories=culprits,
+                message=dummy_variable_trap_message(culprits),
+            )
+            with self._lock:
+                self._invalid_selections[token] = invalid
+            return invalid, "invalid_selection"
+
+        # The fit itself happens outside the lock so a slow fit doesn't
+        # block other students; the count is re-checked and the attempt
+        # committed atomically below.
         fitted = self._cache.get_or_fit(variables)
 
         with self._lock:

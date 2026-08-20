@@ -6,7 +6,7 @@ no work itself — every button click calls the REST API directly from the
 browser via `fetch()`.
 
 This is the original client, kept alongside [`../client/`](../client/) (the
-"Deal Probability"-designed one) as a plainer alternative — handy for
+"Quinn Labs"-branded, designed one) as a plainer alternative — handy for
 quickly eyeballing raw API responses without a styled UI in the way, or as
 a simple starting point if you'd rather build your own design on top of it.
 See `../client/README.md`, "Design origin," for what the styled one adds.

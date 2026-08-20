@@ -5,9 +5,10 @@ A Flask frontend for the deal-likelihood game backend (see
 no work itself — every button click calls the REST API directly from the
 browser via `fetch()`.
 
-The visual design is a reimplementation of a "Deal Probability" mockup built
-in Claude Design (claude.ai/design) — see "Design origin" below for what
-came from the mockup, what changed, and why.
+Branded "Quinn Labs." The visual design is a reimplementation of a "Deal
+Probability" mockup built in Claude Design (claude.ai/design) — see "Design
+origin" below for what came from the mockup, what changed (including the
+rebrand), and why.
 
 A plainer, minimal-styling client also lives at
 [`../client_barebones/`](../client_barebones/) — same pages, same API, no
@@ -109,8 +110,11 @@ was translated by hand into plain Flask templates + vanilla JS + a ported
 CSS stylesheet (`static/css/design.css`) — none of the prototype's own
 runtime (`support.js`, the `<x-dc>`/`sc-if`/`sc-for` custom elements) ships
 here; only its color tokens, typography, spacing, and layout were carried
-over. A few things in the mockup don't correspond to anything this backend
-actually does, and were adapted rather than faked:
+over. The app itself is branded "Quinn Labs" rather than the mockup's own
+"Deal Probability" name — the mockup's filename is kept as-is above since
+that's simply what the handoff file is called. A few things in the mockup
+don't correspond to anything this backend actually does, and were adapted
+rather than faked:
 
 - **The whole "fitted logit curve" and its accuracy number were simulated
   client-side math** (a fake `signal`/`slope` formula, no real fit

@@ -6,8 +6,9 @@ directly to the FastAPI backend (economicsproject.server) over the REST API
 described in ../API_PROTOCOL.md; Flask's only job is handing out the
 HTML/CSS/JS that does that talking.
 
-Pages are a reimplementation of the "Deal Probability" Claude Design mockup
--- see README.md, "Design origin," for what changed and why.
+Pages are a reimplementation of the "Deal Probability" Claude Design mockup,
+rebranded as "Quinn Labs" -- see README.md, "Design origin," for what
+changed and why.
 
 Run with:
     API_BASE_URL=http://127.0.0.1:8000 python app.py

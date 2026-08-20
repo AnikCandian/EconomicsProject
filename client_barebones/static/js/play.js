@@ -1,8 +1,15 @@
 // Student variable-picking page. No live /explore preview any more (that
 // endpoint is deprecated -- see API_PROTOCOL.md, "Attempts"): pick
-// variables, submit, then poll /attempts every second to confirm what
-// actually landed server-side, rather than trusting the POST response
-// alone. Up to 3 attempts per session.
+// variables, submit, then poll every second (both GET /attempts and
+// GET /status) to confirm what actually landed server-side, rather than
+// trusting the POST response alone. Up to 3 attempts per session.
+//
+// Selecting every category of one one-hot field at once (e.g. all 16
+// Industry values) is never sent to the server -- it's the dummy-variable
+// trap (perfect multicollinearity) and can't produce a usable model. The
+// server enforces the same rule independently and never counts it as an
+// attempt; GET /status's last_invalid_selection is how this client learns
+// about a rejection if the /finalize response itself was lost.
 
 const sessionCode = localStorage.getItem("dealGame.sessionCode");
 const studentToken = localStorage.getItem("dealGame.studentToken");
@@ -20,6 +27,7 @@ document.getElementById("student-name-display").textContent = localStorage.getIt
 let maxAttempts = Number(localStorage.getItem("dealGame.maxAttempts") || "3");
 let attemptsUsed = 0;
 let confirmPollHandle = null;
+let lastSeenInvalidAt = 0; // attempted_at of the last invalid_selection we've already shown
 
 function checkboxLabel(value, labelText) {
   const label = document.createElement("label");
@@ -28,6 +36,7 @@ function checkboxLabel(value, labelText) {
   input.type = "checkbox";
   input.name = "variables";
   input.value = value;
+  input.addEventListener("change", updateInvalidSelectionUi);
   label.appendChild(input);
   label.append(" " + labelText);
   return label;
@@ -62,6 +71,39 @@ function setFormDisabled(disabled) {
   document.getElementById("submit-btn").disabled = disabled;
 }
 
+function setInvalidSelectionBanner(message) {
+  const el = document.getElementById("invalid-selection-banner");
+  if (message) {
+    el.textContent = "⚠️ " + message;
+    el.hidden = false;
+  } else {
+    el.hidden = true;
+  }
+}
+
+// Live check as boxes are (un)checked -- this is what keeps a full-category
+// selection from ever being submitted in the first place (see
+// API_PROTOCOL.md, "Attempts", (a)).
+function updateInvalidSelectionUi() {
+  const culprits = fullySelectedCategories(selectedVariables(), categories);
+  setInvalidSelectionBanner(culprits.length > 0 ? dummyVariableTrapMessage(culprits) : "");
+}
+
+// A rejection the server logged for us (either the direct /finalize
+// response, or discovered via /status polling because that response never
+// arrived) -- shown with the exact same banner as the client-side check
+// above, since it's the same rule, just caught late.
+function handleInvalidSelectionResult(invalid) {
+  lastSeenInvalidAt = Math.max(lastSeenInvalidAt, invalid.attempted_at);
+  if (confirmPollHandle) {
+    clearInterval(confirmPollHandle);
+    confirmPollHandle = null;
+  }
+  document.getElementById("pending-banner").hidden = true;
+  setInvalidSelectionBanner(invalid.message);
+  if (attemptsUsed < maxAttempts) setFormDisabled(false);
+}
+
 function updateAttemptsUi() {
   document.getElementById("attempts-counter").textContent = `${attemptsUsed} / ${maxAttempts}`;
   const remaining = maxAttempts - attemptsUsed;
@@ -78,14 +120,6 @@ function renderLatest(attempt) {
   if (!attempt) return;
   document.getElementById("result-raw").textContent = JSON.stringify(attempt, null, 2);
   document.getElementById("result-equation").textContent = attempt.equation || "";
-
-  const warningEl = document.getElementById("result-warning");
-  if (attempt.warning) {
-    warningEl.textContent = "⚠️ " + attempt.warning;
-    warningEl.hidden = false;
-  } else {
-    warningEl.hidden = true;
-  }
 
   const metrics = attempt.basic_test || {};
   document.getElementById("result-summary").innerHTML = `
@@ -110,7 +144,7 @@ function renderAttemptsTable(attemptList) {
     const finalMetrics = a.final_test;
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${a.attempt_number}${a.warning ? " ⚠️" : ""}</td>
+      <td>${a.attempt_number}</td>
       <td>${(a.variables || []).join(", ")}</td>
       <td>${fmtPct(metrics.accuracy)}</td>
       <td>${fmtPct(metrics.yes_deal_accuracy)}</td>
@@ -137,31 +171,59 @@ async function refreshAttempts() {
 document.getElementById("submit-btn").addEventListener("click", async () => {
   const variables = selectedVariables();
   if (variables.length === 0) return alert("Select at least one variable first.");
+
+  // (a) Never even send a full-category selection -- same rule the server
+  // enforces, checked here first so it's blocked before any request goes out.
+  const culprits = fullySelectedCategories(variables, categories);
+  if (culprits.length > 0) {
+    setInvalidSelectionBanner(dummyVariableTrapMessage(culprits));
+    return;
+  }
+
   if (!confirm(`Submit attempt ${attemptsUsed + 1} of ${maxAttempts}? Each attempt is scored for real.`)) return;
 
   const expectedCount = attemptsUsed + 1;
+  const submitStartedAt = Date.now() / 1000;
   setFormDisabled(true);
+  setInvalidSelectionBanner("");
   document.getElementById("pending-banner").hidden = false;
 
   try {
-    await apiRequest(`/sessions/${sessionCode}/finalize`, {
+    const response = await apiRequest(`/sessions/${sessionCode}/finalize`, {
       method: "POST",
       headers: { "X-Student-Token": studentToken },
       body: { variables },
     });
+    if (response.status === "invalid_selection") {
+      // Shouldn't normally happen since (a) already blocked it -- but
+      // handle the direct response too, e.g. if `categories` went stale.
+      handleInvalidSelectionResult(response);
+      return;
+    }
   } catch (err) {
     // Even on a network error the attempt may have landed server-side --
-    // fall through to polling /attempts rather than assuming it didn't.
-    console.warn("finalize request failed, confirming via /attempts instead:", err.message);
+    // fall through to polling rather than assuming it didn't.
+    console.warn("finalize request failed, confirming via polling instead:", err.message);
   }
 
-  // Poll /attempts every second until it reflects the new attempt -- this
-  // is the authoritative source of truth, not the POST response above.
+  // Poll every second until either the attempt count reflects the new
+  // attempt, or /status reports the submission was rejected as an invalid
+  // (dummy-variable-trap) selection -- either way, this is the
+  // authoritative source of truth, not the POST response above. (b)
   confirmPollHandle = setInterval(async () => {
     try {
+      const statusData = await apiRequest(`/sessions/${sessionCode}/status`, {
+        headers: { "X-Student-Token": studentToken },
+      });
+      const invalid = statusData.last_invalid_selection;
+      if (invalid && invalid.attempted_at >= submitStartedAt) {
+        handleInvalidSelectionResult(invalid);
+        return;
+      }
       const data = await refreshAttempts();
       if (data.attempts_used >= expectedCount) {
         clearInterval(confirmPollHandle);
+        confirmPollHandle = null;
         document.getElementById("pending-banner").hidden = true;
         if (data.attempts_remaining > 0) setFormDisabled(false);
       }
@@ -176,6 +238,9 @@ async function pollStatus() {
     const data = await apiRequest(`/sessions/${sessionCode}/status`, {
       headers: { "X-Student-Token": studentToken },
     });
+    if (data.last_invalid_selection && data.last_invalid_selection.attempted_at > lastSeenInvalidAt) {
+      handleInvalidSelectionResult(data.last_invalid_selection);
+    }
     if (data.status === "closed") {
       document.getElementById("closed-banner").hidden = false;
       setFormDisabled(true);

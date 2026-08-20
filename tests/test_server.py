@@ -116,24 +116,42 @@ def test_finalize_rejects_unusable_column():
     assert attempts.json()["attempts_used"] == 0
 
 
-def test_selecting_every_category_of_a_field_is_allowed_but_warns():
+def test_selecting_every_category_of_a_field_is_rejected_and_does_not_consume_an_attempt():
     from economicsproject.dataset import CATEGORY_VALUES
 
     session = _start_session()
     code = session["session_code"]
     student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
     all_industries = [f"Industry_{value}" for value in CATEGORY_VALUES["Industry"]]
 
-    response = client.post(
-        f"/sessions/{code}/finalize",
-        json={"variables": all_industries},
-        headers={"X-Student-Token": student["student_token"]},
-    )
+    response = client.post(f"/sessions/{code}/finalize", json={"variables": all_industries}, headers=headers)
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "ok"
-    assert body["warning"] is not None
-    assert "Industry" in body["warning"]
+    assert body["status"] == "invalid_selection"
+    assert body["culprit_categories"] == ["Industry"]
+    assert "Industry" in body["message"]
+    assert body["attempts_used"] == 0
+    assert body["attempts_remaining"] == 3
+
+    # doesn't consume an attempt
+    attempts = client.get(f"/sessions/{code}/attempts", headers=headers)
+    assert attempts.json()["attempts_used"] == 0
+
+    # ...but is logged and surfaced via /status, for a client whose
+    # /finalize response never arrived
+    poll = client.get(f"/sessions/{code}/status", headers=headers)
+    assert poll.status_code == 200
+    poll_body = poll.json()
+    assert poll_body["status"] == "open"
+    assert poll_body["last_invalid_selection"]["culprit_categories"] == ["Industry"]
+
+    # a normal, valid attempt still works afterward
+    ok = client.post(
+        f"/sessions/{code}/finalize", json={"variables": ["Industry_Travel"]}, headers=headers
+    )
+    assert ok.json()["status"] == "ok"
+    assert ok.json()["attempt_number"] == 1
 
 
 def test_explore_is_deprecated_but_still_works_and_does_not_consume_an_attempt():
