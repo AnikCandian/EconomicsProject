@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Model builder — Deal Probability{% endblock %}
+{% block body %}
+<div class="app-header">
+  <div class="app-brand">
+    <div class="app-brand__mark"></div>
+    <div class="app-brand__name">Deal Probability</div>
+  </div>
+  <div class="app-tab">Model builder</div>
+  <div class="app-user">
+    <div class="app-user__avatar" id="user-avatar"></div>
+    <div id="user-name"></div>
+    <button id="leave-btn" class="link-ghost" style="padding-left:6px">Leave</button>
+  </div>
+</div>
+
+<p id="closed-banner" class="alert" hidden>The professor has ended this session. See your final result below.</p>
+<p id="submitted-banner" class="alert" hidden>You've already finalized your submission — read-only from here.</p>
+
+<div class="builder-layout">
+  <div class="builder-main">
+    <div class="builder-summary">
+      <div class="builder-summary__panel">
+        <div class="eyebrow">Result · logit link</div>
+        <div class="equation-box">
+          <p id="rail-warning-inline" class="rail-warning" hidden></p>
+          <div class="split-bar-row">
+            <span class="split-bar-row__label">Yes-deal</span>
+            <div class="split-bar-track"><div class="split-bar-fill" id="yes-bar" style="width:0%"></div></div>
+            <span class="split-bar-row__pct" id="yes-pct">—</span>
+          </div>
+          <div class="split-bar-row">
+            <span class="split-bar-row__label">No-deal</span>
+            <div class="split-bar-track"><div class="split-bar-fill" id="no-bar" style="width:0%"></div></div>
+            <span class="split-bar-row__pct" id="no-pct">—</span>
+          </div>
+          <div class="equation-text" id="equation-text">Pick at least one variable below to fit a model.</div>
+        </div>
+        <div class="equation-caption">Recall by actual outcome, seasons 8–10 (basic test)</div>
+      </div>
+      <div class="builder-summary__intro">
+        <div class="eyebrow">Specification · logit link</div>
+        <h1>Choose the predictors in your model.</h1>
+        <p>Every variable you switch on enters the logit specification as a term. The score is how accurately that model classifies deal / no deal on seasons 8–10, held out of fitting.</p>
+      </div>
+    </div>
+
+    <div class="predictor-groups" id="predictor-groups"></div>
+
+    <div class="builder-footer">
+      <div class="builder-footer__label">Training data</div>
+      <div>Seasons 1–7 · fixed by the backend</div>
+      <div class="builder-footer__note">Seasons 8–10 score you live; seasons 11+ stay hidden until the professor stops the session</div>
+    </div>
+  </div>
+
+  <div class="builder-rail">
+    <div class="builder-rail__inner">
+      <p id="rail-warning" class="rail-warning" hidden></p>
+      <div class="eyebrow">Basic-test accuracy · seasons 8–10</div>
+      <div class="rail-score">
+        <div class="rail-score__num" id="rail-pct">—</div>
+        <div class="rail-score__pct">%</div>
+      </div>
+      <div class="rail-bar"><div class="rail-bar__fill" id="rail-bar-fill" style="width:0%"></div></div>
+
+      <hr class="divider">
+      <div class="eyebrow">Correctly classified</div>
+      <div class="rail-correct">
+        <div class="rail-correct__num" id="rail-correct">—</div>
+        <div class="rail-correct__denom">/ <span id="rail-scored">—</span> pitches</div>
+      </div>
+      <div class="rail-grid">
+        <div class="rail-grid__cell">
+          <div class="rail-grid__label">Deals hit</div>
+          <div class="rail-grid__value" id="rail-deals">—</div>
+          <div class="rail-grid__meta" id="rail-deals-meta">—</div>
+        </div>
+        <div class="rail-grid__cell">
+          <div class="rail-grid__label">No-deals hit</div>
+          <div class="rail-grid__value" id="rail-nodeals">—</div>
+          <div class="rail-grid__meta" id="rail-nodeals-meta">—</div>
+        </div>
+      </div>
+
+      <hr class="divider">
+      <div class="rail-stat-row"><span>Predictors in model</span><span id="rail-count">0 / 0</span></div>
+      <div class="rail-stat-row"><span>Link function</span><span>Logit</span></div>
+      <div class="rail-stat-row"><span>Status</span><span id="rail-status">Not fitted yet</span></div>
+
+      <button id="save-btn" class="btn-accent" style="margin:22px 0 8px">Save specification</button>
+      <button id="clear-btn" class="btn-outline">Clear all predictors</button>
+    </div>
+  </div>
+</div>
+
+<details style="margin:0 32px 32px">
+  <summary style="cursor:pointer;font-size:12px;color:var(--color-neutral-600)">Raw response</summary>
+  <pre id="result-raw" style="background:var(--color-surface);padding:12px;overflow-x:auto;font-size:11px"></pre>
+</details>
+
+<div id="final-section" hidden style="padding:0 32px 32px">
+  <div class="eyebrow">Session results</div>
+  <div class="rail-stat-row"><span>Your basic-test rank</span><span id="final-basic-rank">—</span></div>
+  <div class="rail-stat-row"><span>Your final-test rank</span><span id="final-final-rank">—</span></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/builder.js') }}"></script>
+{% endblock %}

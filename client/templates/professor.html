@@ -1,71 +1,131 @@
 {% extends "base.html" %}
-{% block title %}Professor{% endblock %}
-{% block content %}
+{% block title %}Monitoring — Deal Probability{% endblock %}
+{% block body %}
+<div class="app-header">
+  <div class="app-brand">
+    <div class="app-brand__mark"></div>
+    <div class="app-brand__name">Deal Probability</div>
+  </div>
+  <div class="app-tab">Monitoring</div>
+  <div class="app-user">
+    <div class="app-user__avatar">PR</div>
+    <div>Professor</div>
+    <button id="signout-btn" class="link-ghost" style="padding-left:6px">Sign out</button>
+  </div>
+</div>
 
-<section id="start-section">
-  <h2>Start a session</h2>
-  <label>Professor key
-    <input id="professor-key" type="password" autocomplete="off">
-  </label>
-  <button id="start-btn">Start session</button>
-  <p id="start-error" class="error"></p>
-</section>
-
-<section id="session-section" hidden>
-  <h2>Session <span id="session-code"></span></h2>
-  <p>
-    Share this code with students.
-    Host token (kept only in this browser tab): <code id="host-token"></code>
+<div id="pre-session" style="padding:48px 32px;max-width:520px">
+  <div class="eyebrow">Admin</div>
+  <h1 style="font-size:34px;margin-bottom:14px">Start a session.</h1>
+  <p style="color:var(--color-neutral-700);margin-bottom:20px">
+    Starting a session mints a join code students can use immediately.
   </p>
-  <button id="stop-btn">Stop session</button>
-  <p id="stop-error" class="error"></p>
+  <p id="start-error" class="alert" hidden></p>
+  <button id="start-btn" class="btn-accent" style="width:auto;padding-left:22px;padding-right:22px">Start session</button>
+</div>
 
-  <h3>Dashboard <small>(polling every 5 seconds)</small></h3>
-  <dl id="dashboard-summary"></dl>
-
-  <h3>Students online</h3>
-  <ul id="students-online"></ul>
-
-  <h3>Leaderboard <small>(finalized submissions, basic test)</small></h3>
-  <div class="table-scroll">
-    <table id="leaderboard-table">
-      <thead>
-        <tr>
-          <th>#</th><th>Student</th><th>Variables</th>
-          <th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th><th>Equation</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
-
-<section id="results-section" hidden>
-  <h2>Final results</h2>
-
-  <h3>Leaderboard — seasons 8-10 (basic test)</h3>
-  <div class="table-scroll">
-    <table id="basic-results-table">
-      <thead>
-        <tr><th>#</th><th>Student</th><th>Variables</th><th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+<div id="dashboard" hidden>
+  <div class="mon-head">
+    <div style="margin-right:auto">
+      <div class="eyebrow">Admin</div>
+      <h1>Monitoring</h1>
+    </div>
+    <div class="tab-toggle">
+      <button id="tab-live-btn" class="tab-toggle__btn is-active">
+        <span class="status-dot is-live" style="width:7px;height:7px"></span> Live
+      </button>
+      <button id="tab-final-btn" class="tab-toggle__btn">Final results</button>
+    </div>
   </div>
 
-  <h3>Leaderboard — seasons 11+ (final test)</h3>
-  <div class="table-scroll">
-    <table id="final-results-table">
-      <thead>
-        <tr><th>#</th><th>Student</th><th>Variables</th><th>Accuracy</th><th>Yes-deal %</th><th>No-deal %</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <div id="session-bar" class="session-bar is-running">
+    <div class="session-status">
+      <span class="session-dot is-live" id="session-dot"></span>
+      <div>
+        <div class="session-title-row">
+          <div class="session-title" id="session-title">Session in progress</div>
+          <div class="session-code-chip" id="session-code-chip"></div>
+        </div>
+        <div class="session-note" id="session-note"></div>
+      </div>
+    </div>
+    <div class="session-elapsed">
+      <div class="session-elapsed__label">Elapsed</div>
+      <div class="session-elapsed__value" id="session-elapsed">00:00</div>
+    </div>
+    <button id="stop-btn" class="btn-session is-running">End session</button>
   </div>
-</section>
 
+  <div class="season-info">
+    <div class="season-info__label">Training data available to users</div>
+    <div class="season-info__chips">
+      <span class="tag">Train · seasons 1–7 · <strong>611</strong> pitches</span>
+      <span class="tag tag-accent">Basic test (live) · seasons 8–10 · <strong>284</strong> pitches</span>
+      <span class="tag">Final test (revealed at stop) · seasons 11–17 · <strong>586</strong> pitches</span>
+    </div>
+    <div class="season-info__note">Fixed by the backend — every user's model refits on the same seasons 1–7 sample.</div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <div class="stat-tile__label">Students online</div>
+      <div class="stat-tile__row"><div class="stat-tile__value" id="stat-online">0</div></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile__label">Finalized</div>
+      <div class="stat-tile__row"><div class="stat-tile__value" id="stat-finalized">0</div></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile__label">Median accuracy</div>
+      <div class="stat-tile__row"><div class="stat-tile__value" id="stat-median">—</div><div class="stat-tile__note">% out-of-sample</div></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile__label">Predictors used (avg)</div>
+      <div class="stat-tile__row"><div class="stat-tile__value" id="stat-avg-vars">0</div></div>
+    </div>
+  </div>
+
+  <div id="live-panel" class="mon-grid">
+    <div class="mon-col mon-col--left">
+      <div class="mon-list-head">
+        <h2>Active now</h2>
+        <span class="mon-list-head__note">updating every 5s</span>
+      </div>
+      <div class="mon-table-head">
+        <div>User</div><div>Accuracy</div><div>Predictors</div><div>Finalized</div>
+      </div>
+      <div id="leaderboard-rows"></div>
+
+      <hr class="divider" style="margin:32px 0 20px">
+      <h2>Most-included predictors</h2>
+      <div class="mon-list-head__note" style="margin-bottom:18px">Share of finalized specifications containing each term</div>
+      <div class="popular-list" id="popular-list"></div>
+    </div>
+
+    <div class="mon-col">
+      <h2>Accuracy distribution</h2>
+      <div class="mon-list-head__note" style="margin-bottom:22px">Finalized specifications, this session</div>
+      <div class="dist-chart" id="dist-chart"></div>
+      <div class="dist-labels" id="dist-labels"></div>
+    </div>
+  </div>
+
+  <div id="final-panel" hidden style="padding:24px 32px 32px">
+    <p id="final-empty" class="empty-note">Results appear once you end the session.</p>
+    <div id="final-tables" hidden>
+      <h2>Leaderboard — seasons 8–10 (basic test)</h2>
+      <div class="mon-table-head"><div>User</div><div>Accuracy</div><div>Predictors</div><div>&nbsp;</div></div>
+      <div id="final-basic-rows"></div>
+
+      <hr class="divider" style="margin:32px 0 20px">
+      <h2>Leaderboard — seasons 11+ (final test)</h2>
+      <div class="mon-table-head"><div>User</div><div>Accuracy</div><div>Predictors</div><div>&nbsp;</div></div>
+      <div id="final-final-rows"></div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
-<script src="{{ url_for('static', filename='js/professor.js') }}"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}"></script>
 {% endblock %}

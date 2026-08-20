@@ -3,21 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Deal-Likelihood Game{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <title>{% block title %}Deal Probability{% endblock %}</title>
   <script>window.API_BASE_URL = {{ api_base_url|tojson }};</script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/design.css') }}">
+  <!-- Archivo loads without ever blocking rendering or parsing -- the
+       media="print" trick defers it to non-blocking, then flips to "all"
+       once loaded. A slow/blocked font host (some classroom networks
+       restrict outbound access) never holds up the page this way. -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&display=swap"
+        media="print" onload="this.media='all'">
 </head>
 <body>
-  <header>
-    <a href="{{ url_for('index') }}"><h1>Deal-Likelihood Game</h1></a>
-    <nav>
-      <a href="{{ url_for('professor') }}">Professor</a>
-      <a href="{{ url_for('join') }}">Student</a>
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  {% block body %}{% endblock %}
   {% block scripts %}{% endblock %}
 </body>
 </html>
