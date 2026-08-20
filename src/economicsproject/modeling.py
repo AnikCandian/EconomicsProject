@@ -15,7 +15,16 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from .dataset import PreparedDataset, TARGET_COLUMN, validate_variable_selection
+from .dataset import PreparedDataset, TARGET_COLUMN, fully_selected_categories, validate_variable_selection
+
+
+class ModelFitError(ValueError):
+    """The design matrix could not be fit at all (statsmodels itself failed).
+
+    Distinct from a merely *degenerate* fit (see ``FittedModel.warning``),
+    which still returns a result -- this is for the rarer case where the
+    solver hard-fails instead of silently returning an arbitrary answer.
+    """
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,7 @@ class FittedModel:
     train_pseudo_r_squared: float
     train_means: dict[str, float]  # for imputing missing values on any other split
     basic_test: ConfusionMetrics  # seasons 8-10, computed once at fit time
+    warning: str | None = None  # set when the fit is numerically degenerate -- see below
 
 
 def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> FittedModel:
@@ -46,6 +56,13 @@ def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> Fit
     "Industry_Travel"), there's no "logical name expands to N dummies" step.
     This validates them itself (via ``dataset.validate_variable_selection``),
     so this guard holds even when called directly, outside the API.
+
+    Selecting every category of the same one-hot field at once (e.g. all 16
+    Industry values) is allowed, on purpose: it's a genuinely instructive
+    failure mode. It's *not* rejected up front -- instead this still fits a
+    model and returns it, but with ``FittedModel.warning`` explaining why the
+    resulting coefficients aren't a real, unique answer. See
+    ``describe_collinearity`` for the reasoning.
     """
     validate_variable_selection(feature_columns)
     train_df, basic_test_df, _ = dataset.split_by_season()
@@ -55,7 +72,15 @@ def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> Fit
 
     X_train = sm.add_constant(train_df[feature_columns], has_constant="add")
     y_train = train_df[TARGET_COLUMN]
-    result = sm.Logit(y_train, X_train).fit(disp=0)
+    warning = describe_collinearity(feature_columns, X_train)
+
+    try:
+        result = sm.Logit(y_train, X_train).fit(disp=0)
+    except np.linalg.LinAlgError as exc:
+        raise ModelFitError(
+            f"Could not fit a model on {feature_columns!r} -- the design matrix is singular. {exc}"
+        ) from exc
+
     coefficients = {name: float(value) for name, value in result.params.items()}
 
     return FittedModel(
@@ -65,6 +90,46 @@ def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> Fit
         train_pseudo_r_squared=float(result.prsquared),
         train_means=train_means,
         basic_test=score(coefficients, feature_columns, train_means, basic_test_df),
+        warning=warning,
+    )
+
+
+def describe_collinearity(feature_columns: list[str], X: pd.DataFrame) -> str | None:
+    """Explain, in plain language, why a design matrix is perfectly collinear
+    -- or return None if it isn't.
+
+    Detected numerically (matrix rank < column count), not by pattern-
+    matching "did they pick every category" -- so this catches the general
+    case, not just the one we anticipated. Most commonly triggered by
+    selecting every category of one one-hot field at once: those dummy
+    columns sum to 1 for every row, exactly duplicating the intercept
+    column. When that happens there's no unique best-fit answer -- an
+    entire line of coefficient vectors (shift the intercept by c, shift
+    every one of that field's coefficients by -c) score identically. The
+    optimizer still returns *something* (it doesn't error), but which point
+    on that line you get depends on the solver and its starting point, not
+    on the data.
+    """
+    if np.linalg.matrix_rank(X.to_numpy()) >= X.shape[1]:
+        return None
+
+    culprits = fully_selected_categories(feature_columns)
+    if culprits:
+        named = " and ".join(f"{c!r}" for c in culprits)
+        cause = (
+            f"every category of {named} was selected at once, so those dummy "
+            "columns sum to 1 for every row -- exactly duplicating the intercept."
+        )
+    else:
+        cause = "the selected columns are an exact linear combination of one another."
+
+    return (
+        f"This variable set is perfectly multicollinear: {cause} There is no unique "
+        "best-fit answer -- the coefficients below are just one arbitrary point among "
+        "infinitely many that score identically. Different solvers (or even the same "
+        "solver from a different starting point) can return different numbers for the "
+        "exact same data, and standard errors are undefined. Treat this as a "
+        "demonstration of a broken fit, not a usable model."
     )
 
 

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Deal Probability{% endblock %}
+{% block body %}
+<div class="landing">
+  <div class="landing-hero">
+    <div class="landing-hero__brand">
+      <div class="landing-hero__mark"></div>
+      <div class="landing-hero__brand-name">Deal Probability</div>
+    </div>
+    <div class="landing-hero__headline">Build a model. Beat the base rate.</div>
+    <p class="landing-hero__sub">
+      Choose which variables enter a logit model of deal versus no deal, and
+      see how accurately your specification classifies pitches it was never
+      fitted on.
+    </p>
+    <div class="landing-hero__divider"></div>
+    <div class="landing-hero__stats">
+      <span>{{ usable_column_count }} predictors</span>
+      <span>17 seasons</span>
+      <span>Base rate {{ base_rate }}%</span>
+    </div>
+  </div>
+
+  <div class="landing-panel">
+    <div id="join-view">
+      <div class="eyebrow">Join a session</div>
+      <h1>Enter your session code.</h1>
+
+      <label class="field-label" for="session-code">Session code</label>
+      <input id="session-code" class="input-lg" placeholder="482913" maxlength="6" autocomplete="off">
+
+      <label class="field-label" for="full-name">Your name</label>
+      <input id="full-name" class="input-name" placeholder="First and last name" autocomplete="off">
+
+      <p id="join-error" class="alert" hidden></p>
+
+      <button id="join-btn" class="btn-accent">Join session</button>
+
+      <div class="status-row">
+        <span class="status-dot"></span>
+        Enter the code your professor shared with you, then your name.
+      </div>
+
+      <hr class="divider">
+      <button id="open-admin-btn" class="link-ghost">Administrator sign-in</button>
+    </div>
+
+    <div id="admin-view" hidden>
+      <div class="eyebrow">Administrator</div>
+      <h1>Sign in to host a session.</h1>
+      <div class="field-label">Administrator key</div>
+      <div class="admin-row">
+        <input id="admin-key" type="password" class="input-pw" placeholder="••••••••" autocomplete="off">
+        <button id="admin-signin-btn" class="btn-dark">Sign in</button>
+      </div>
+      <p id="admin-error" class="alert" hidden></p>
+      <button id="back-to-join-btn" class="link-ghost" style="margin-top:14px">Back to student join</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/landing.js') }}"></script>
+{% endblock %}

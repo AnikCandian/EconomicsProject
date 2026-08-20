@@ -68,6 +68,7 @@ class Submission:
     basic_test: ConfusionMetrics
     finalized_at: float = field(default_factory=time.time)
     final_test: ConfusionMetrics | None = None  # filled in once the session closes
+    warning: str | None = None  # set if this variable set is numerically degenerate
 
 
 @dataclass
@@ -142,6 +143,7 @@ class Session:
             variables=sorted(set(variables)),
             equation=fitted.equation,
             basic_test=fitted.basic_test,
+            warning=fitted.warning,
         )
         with self._lock:
             existing = self._submissions.get(token)

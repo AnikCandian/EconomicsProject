@@ -56,12 +56,34 @@ to reintroduce the whole-field toggle behavior.
 
 The one thing this reintroduces: if a student selects **every** category of
 the same original field at once, those dummies sum to 1 for every row and
-are exactly collinear with the model's intercept — unsolvable.
-`dataset.validate_variable_selection()` guards against exactly that case
-(and against unusable column names generally). It's called both by the API
-layer (for a clean 400) and inside `modeling.fit_logit_model()` itself, so
-the guard holds even if you call the modeling code directly, outside the
-API — don't remove either call site.
+are exactly collinear with the model's intercept. `dataset
+.validate_variable_selection()` still guards against unusable column names
+(and is still called both by the API layer and inside
+`modeling.fit_logit_model()` itself — don't remove either call site) — but
+it deliberately does **not** reject the full-category case. That's on
+purpose: it's a genuinely instructive mistake, not an input error worth
+blocking.
+
+**What "unsolvable" actually means in practice, and why we don't just
+reject it:** the fit doesn't error. statsmodels reports success and hands
+back a completely normal-looking equation. But the design matrix has one
+fewer independent direction than columns (verified: `numpy.linalg
+.matrix_rank` comes back short by exactly 1), so there's a whole line of
+equally-"correct" coefficient vectors — shift the intercept by any constant
+`c` and every one of that field's coefficients by `-c`, and predictions are
+identical, because exactly one dummy is always 1 and the `+c`/`-c` cancels
+every time. Empirically (checked, not assumed): Newton, BFGS, and L-BFGS
+converge to *different* numbers on identical data, standard errors come
+back `NaN`, condition number ~10¹⁵. `modeling.describe_collinearity()`
+detects this numerically (rank deficiency, not "did they pick every
+category" pattern-matching — so it also catches any other combination that
+happens to be exactly collinear) and attaches a plain-language `warning` to
+`FittedModel`, which flows through to the API response and the professor's
+live leaderboard. This is the better lesson: silently blocking the option
+teaches nothing, and silently allowing it without comment would be worse
+than either, since the response would look completely normal. See
+`API_PROTOCOL.md`, "Degenerate fits," for the full writeup and an example
+payload.
 
 ## Module responsibilities (keep this modular)
 
