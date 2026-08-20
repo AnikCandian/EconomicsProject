@@ -19,6 +19,7 @@ document.getElementById("join-btn").addEventListener("click", async () => {
     localStorage.setItem("dealGame.usableColumns", JSON.stringify(data.usable_columns));
     localStorage.setItem("dealGame.categories", JSON.stringify(data.categories));
     localStorage.setItem("dealGame.dummyColumnCategory", JSON.stringify(data.dummy_column_category));
+    localStorage.setItem("dealGame.maxAttempts", String(data.max_attempts));
 
     window.location.href = "/play";
   } catch (err) {

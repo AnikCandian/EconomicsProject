@@ -7,7 +7,7 @@ described in ../API_PROTOCOL.md; Flask's only job is handing out the
 HTML/CSS/JS that does that talking.
 
 This is the original minimal-styling client, kept alongside ../client/ (the
-Deal Probability-designed one) as a plainer alternative -- useful for
+"Quinn Labs"-branded, designed one) as a plainer alternative -- useful for
 quickly eyeballing raw API responses without the styled UI in the way, or
 if you'd rather build your own design on top of a simple starting point.
 See ../client/README.md, "Design origin," for what the other one adds.

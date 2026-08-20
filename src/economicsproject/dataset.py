@@ -102,11 +102,17 @@ DUMMY_COLUMN_CATEGORY: dict[str, str] = {
 def validate_variable_selection(variables: list[str]) -> None:
     """Raise ValueError if any name in ``variables`` isn't a real, usable column.
 
-    Deliberately does NOT reject selecting every category of one field at
-    once (e.g. all 16 Industry values) -- that's numerically degenerate
-    (see modeling.describe_collinearity) but not disallowed. Letting a
-    student pick it and see *why* the resulting model is meaningless is a
-    better lesson than silently blocking the option.
+    This only checks column names -- it does not, by itself, reject
+    selecting every category of one field at once (the "dummy variable
+    trap"; see ``fully_selected_categories``). In the actual student game
+    that specific case is rejected by ``sessions.Session.finalize()``
+    before any fit is attempted (a dedicated ``"invalid_selection"``
+    status, not a plain ValueError -- see API_PROTOCOL.md, "Attempts").
+    ``modeling.fit_logit_model()`` used directly, outside a game session
+    (see CLAUDE.md, "Running a model standalone"), still allows it and
+    reports a degenerate-fit warning instead -- seeing *why* the fit breaks
+    is a useful demonstration there, just not something a student should be
+    able to spend a scored attempt on.
     """
     unusable = sorted(set(variables) - set(USABLE_COLUMNS))
     if unusable:
@@ -122,6 +128,23 @@ def fully_selected_categories(variables: list[str]) -> list[str]:
         for category, values in CATEGORY_VALUES.items()
         if {_dummy_column_name(category, value) for value in values} <= chosen
     ]
+
+
+def dummy_variable_trap_message(culprit_categories: list[str]) -> str:
+    """Short, student-facing explanation for rejecting a finalize() attempt
+    that selects every category of one or more one-hot fields at once --
+    the "dummy variable trap" (those dummies sum to 1 for every row,
+    exactly duplicating the intercept; see modeling.describe_collinearity
+    for the full numerical explanation, which this deliberately doesn't
+    repeat). Kept short: nobody but the professor needs the underlying
+    math, just that the choice isn't allowed and how to fix it.
+    """
+    named = " and ".join(culprit_categories)
+    return (
+        f"Can't build a model with every {named} option selected — that's "
+        "the dummy variable trap (perfect multicollinearity from one-hot "
+        f"encoding). Deselect at least one {named} option and try again."
+    )
 
 
 def one_hot_encode_categories(df: pd.DataFrame, category_values: dict[str, list[str]]) -> pd.DataFrame:
