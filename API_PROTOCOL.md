@@ -367,6 +367,22 @@ re-running the regression. The cache is shared across all sessions on the
 server, not per-session, since the fit is a pure function of the training
 data and the variable set.
 
+**Fits for the same variable set are serialized, not run in parallel.**
+`ModelCache.get_or_fit()` used to fit outside any per-key lock on a cache
+miss, on the assumption that two students racing to be first with the same
+new combination was merely duplicated work, not unsafe. In practice this
+produced an intermittent `LinAlgError: SVD did not converge` on exactly
+that race — statsmodels'/numpy's LAPACK calls aren't guaranteed
+thread-safe under true concurrent invocation on every BLAS build, and a
+real classroom session (many students trying the same "obvious" first
+variable within the same second, each request on its own thread) hits this
+easily. Fixed: at most one thread ever fits a given variable set at a
+time; a concurrent request for the *same* set waits for that fit rather
+than racing it. Different variable sets are unaffected and still fit fully
+in parallel — this is a per-key lock, not a global one, so one slow fit
+never blocks unrelated ones. See `CLAUDE.md`, "Fixed bugs: `SVD did not
+converge`," for the full writeup.
+
 ## Real-time updates (read this if you're building the frontend)
 
 This API has no push channel. Two consequences:

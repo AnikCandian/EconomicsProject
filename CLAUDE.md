@@ -251,7 +251,7 @@ against the final hold-out (not just each student's best) — that's what
 lets a student later see, via `GET /attempts`, which of their 3 tries
 would actually have scored best on the data nobody could see while playing.
 
-## Fixed bug: a definitive `/finalize` failure used to hang the client forever
+## Fixed bugs: `SVD did not converge`, its causes, and the client hang it produced
 
 A student selecting enough numeric predictors at once (reproduces with
 just `NUMERIC_USABLE_COLUMNS`, no `Industry_*` involved) could make
@@ -289,7 +289,35 @@ match); check any new column the same way before adding it (`train[col]
 .notna().sum()` across the training AND basic-test season ranges, not just
 the whole dataset) if the raw CSV ever changes again.
 
-**Even with both of those fixed, the deeper bug was client-side.**
+**A third, separate cause of the same `LinAlgError: SVD did not converge`
+symptom: a race in `ModelCache.get_or_fit()`, not anything about which
+variables were picked.** The first two causes above need a student to
+select an unusually large or specific set of columns; this one can happen
+on *any* normal, small, perfectly fittable combination. `get_or_fit()`
+used to check the cache, then fit **outside any per-key lock** if it
+missed — on the stated assumption that "a duplicate concurrent fit of the
+same key is wasted work but still correct." That assumption doesn't hold
+in general: statsmodels'/numpy's underlying LAPACK calls aren't guaranteed
+thread-safe under true concurrent invocation on every BLAS build, and a
+real classroom session reproduces the concurrency easily — many students
+trying the same "obvious" first variable(s) within the same second, each
+request dispatched to its own thread by FastAPI. Symptom matched exactly:
+an intermittent, otherwise-unreproducible SVD failure on a student's
+*first* attempt at a given combination, while identical follow-up
+attempts — served straight from the now-populated cache, never re-fit —
+always succeeded. Fixed: `get_or_fit()` now serializes fits *per key* (a
+lock per distinct variable set, not one global lock), so at most one
+thread ever fits a given key at a time; unrelated keys still fit fully in
+parallel, so one slow fit still doesn't block unrelated ones. Verified via
+a deterministic test (`tests/test_cache.py`) that patches `fit_logit_model`
+with an artificial delay to force genuine thread overlap and asserts it's
+only ever called once for 10 concurrent callers of the same key -- confirmed
+this fails against the old code (`10 == 1`) and passes against the fix. A
+second test confirms two *different* keys still fit concurrently, not
+serialized against each other, using a two-party `threading.Barrier` that
+only completes if both fits are genuinely running at the same time.
+
+**Even with all three fixed, there's a fourth, client-side bug on top.**
 `numpy.linalg.LinAlgError` actually *is* a `ValueError` subclass (verified
 directly), so `server.py`'s `except ValueError` in the `/finalize` handler
 already turned it into a clean `400` — the backend was never the thing
