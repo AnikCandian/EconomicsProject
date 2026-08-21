@@ -186,8 +186,22 @@ async function postFinalize(variables) {
       return true;
     }
   } catch (err) {
-    // Even on a network error the attempt may have landed server-side --
-    // fall through to polling rather than assuming it didn't.
+    if (err.status) {
+      // A real HTTP response came back -- the server received this
+      // request and rejected it outright (unusable columns, an unfittable
+      // design matrix, ...). That's a definitive answer, not a
+      // maybe-it-landed network hiccup: none of these cases ever reach
+      // Session.finalize()'s attempt-recording step, so nothing was
+      // consumed. Show it and stop -- polling/resending would just repeat
+      // the identical failure forever (this used to hang the page here).
+      setInvalidSelectionBanner(err.message);
+      document.getElementById("pending-banner").hidden = true;
+      if (attemptsUsed < maxAttempts) setFormDisabled(false);
+      return true;
+    }
+    // A genuine network-level failure (no HTTP response at all) -- the
+    // attempt may still have landed server-side, so fall through to
+    // polling rather than assuming it didn't.
     console.warn("finalize request failed, confirming via polling instead:", err.message);
   }
   return false;

@@ -49,7 +49,7 @@ def test_finalize_beyond_max_attempts_is_exhausted_and_unchanged(store):
     for variables in (["Industry_Travel"], ["Original Ask Amount"], ["Industry_Automotive"]):
         session.finalize(student.token, variables)
 
-    fourth, status = session.finalize(student.token, ["Guest Present"])
+    fourth, status = session.finalize(student.token, ["Season Number"])
 
     assert status == "attempts_exhausted"
     assert fourth.attempt_number == 3  # the third (last) attempt, unchanged
@@ -107,7 +107,7 @@ def test_explore_reports_exhausted_once_max_attempts_used(store):
     for variables in (["Industry_Travel"], ["Original Ask Amount"], ["Industry_Automotive"]):
         session.finalize(student.token, variables)
 
-    fitted, explore_status = session.explore(student.token, ["Guest Present"])
+    fitted, explore_status = session.explore(student.token, ["Season Number"])
 
     assert explore_status == "attempts_exhausted"
     assert fitted is None

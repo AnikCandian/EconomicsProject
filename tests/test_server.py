@@ -68,7 +68,7 @@ def test_full_game_flow_with_three_attempts():
     assert third.json()["attempts_remaining"] == 0
 
     # a 4th attempt is refused, not silently recomputed
-    fourth = client.post(f"/sessions/{code}/finalize", json={"variables": ["Guest Present"]}, headers=headers)
+    fourth = client.post(f"/sessions/{code}/finalize", json={"variables": ["Season Number"]}, headers=headers)
     assert fourth.status_code == 200
     fourth_body = fourth.json()
     assert fourth_body["status"] == "attempts_exhausted"
@@ -114,6 +114,41 @@ def test_finalize_rejects_unusable_column():
     # a bad request shouldn't consume an attempt
     attempts = client.get(f"/sessions/{code}/attempts", headers={"X-Student-Token": student["student_token"]})
     assert attempts.json()["attempts_used"] == 0
+
+
+def test_guest_present_is_rejected_as_unusable_not_a_raw_crash():
+    # Regression test: see CLAUDE.md, "a definitive /finalize failure used
+    # to hang the client forever" -- Guest Present used to guarantee an
+    # uncaught 500 (MissingDataError), not even a clean 400.
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
+
+    response = client.post(f"/sessions/{code}/finalize", json={"variables": ["Guest Present"]}, headers=headers)
+    assert response.status_code == 400
+    assert "Guest Present" in response.json()["detail"]
+    attempts = client.get(f"/sessions/{code}/attempts", headers=headers)
+    assert attempts.json()["attempts_used"] == 0
+
+
+def test_finalize_fails_cleanly_not_a_raw_crash_on_all_numeric_columns():
+    # Regression test: matrix_rank's SVD used to fail to converge on this
+    # exact selection and escape as a raw, uncaught LinAlgError. Should
+    # never come back as a 500; either a clean 200 (fit with a warning) or
+    # a clean 400 (ModelFitError) is fine.
+    from economicsproject.dataset import NUMERIC_USABLE_COLUMNS
+
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
+
+    response = client.post(f"/sessions/{code}/finalize", json={"variables": NUMERIC_USABLE_COLUMNS}, headers=headers)
+    assert response.status_code in (200, 400)
+    if response.status_code == 400:
+        attempts = client.get(f"/sessions/{code}/attempts", headers=headers)
+        assert attempts.json()["attempts_used"] == 0  # a failed fit shouldn't consume an attempt
 
 
 def test_selecting_every_category_of_a_field_is_rejected_and_does_not_consume_an_attempt():
