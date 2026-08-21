@@ -51,8 +51,11 @@ What makes this buildable as-is:
   requirements.txt` also installs this project itself in editable mode
   (same as the local `pip install -e .` step in `README.md`) -- without
   that line, `economicsproject.server:app` wouldn't be importable.
-- `.python-version` pins the buildpack to Python 3.11, matching what this
-  project's been developed and tested against.
+- `.python-version` pins the buildpack to Python 3.13 -- Google Cloud's
+  buildpacks currently require 3.13.0 or newer, so this isn't just a
+  preference; an older pin (3.11, 3.12) fails the build outright. Verified
+  by actually installing this project's dependencies and running the full
+  test suite (and the Procfile command itself) under Python 3.13.
 - `.gcloudignore` keeps `client/`, `client_barebones/`, and `tests/` out of
   the upload -- the backend doesn't need them.
 - The raw dataset (`src/economicsproject/Shark Tank US dataset.csv`) is
