@@ -1,0 +1,24 @@
+# What NOT to upload when deploying the backend service with:
+#   gcloud run deploy <service> --source .
+# Keeps the upload to just what the backend needs -- the frontends live in
+# their own directories with their own Procfile/.gcloudignore and are
+# deployed as separate Cloud Run services (see DEPLOY.md).
+
+.git/
+.gitignore
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+src/economicsproject/prepared_shark_tank_dataset.csv
+
+tests/
+client/
+client_barebones/
+requirements-dev.txt

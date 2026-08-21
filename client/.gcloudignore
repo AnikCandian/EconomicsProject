@@ -1,0 +1,8 @@
+# What NOT to upload when deploying this frontend with:
+#   gcloud run deploy <service> --source client
+.git/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]

@@ -6,3 +6,10 @@ statsmodels
 jupyter
 fastapi
 uvicorn
+
+# Installs this project itself (editable) so `economicsproject` is
+# importable -- same as running `pip install -e .` by hand (see README.md,
+# "Setup"). Needed here too because Google Cloud's buildpack build only
+# runs `pip install -r requirements.txt`; it doesn't separately install the
+# local package unless this line tells it to (see DEPLOY.md).
+-e .
