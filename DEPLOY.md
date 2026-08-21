@@ -51,8 +51,11 @@ What makes this buildable as-is:
   requirements.txt` also installs this project itself in editable mode
   (same as the local `pip install -e .` step in `README.md`) -- without
   that line, `economicsproject.server:app` wouldn't be importable.
-- `.python-version` pins the buildpack to Python 3.11, matching what this
-  project's been developed and tested against.
+- `.python-version` pins the buildpack to Python 3.13 -- Google Cloud's
+  buildpacks currently require 3.13.0 or newer, so this isn't just a
+  preference; an older pin (3.11, 3.12) fails the build outright. Verified
+  by actually installing this project's dependencies and running the full
+  test suite (and the Procfile command itself) under Python 3.13.
 - `.gcloudignore` keeps `client/`, `client_barebones/`, and `tests/` out of
   the upload -- the backend doesn't need them.
 - The raw dataset (`src/economicsproject/Shark Tank US dataset.csv`) is
@@ -119,15 +122,114 @@ gcloud run deploy deal-game-backend \
   --update-env-vars CORS_ORIGINS=<client-service-url-from-step-2>
 ```
 
+## Deploying via the Cloud Console (the web UI, no CLI)
+
+Everything above also works by clicking through
+[console.cloud.google.com/run](https://console.cloud.google.com/run)
+instead of running `gcloud` -- same `Procfile`/buildpack setup, just
+triggered from GitHub instead of an upload from your machine. This also
+gets you continuous deployment for free: every push to the branch you pick
+triggers a rebuild and redeploy automatically, no `gcloud run deploy`
+needed again after the first setup.
+
+**Backend, first:**
+
+1. Cloud Run → **Create service**.
+2. Choose **"Continuously deploy from a repository"** → **Set up with
+   Cloud Build**.
+3. Connect your GitHub account if you haven't, then pick this repo and the
+   branch to deploy from.
+4. **Build type: Google Cloud Buildpacks** (not Dockerfile -- there isn't
+   one, and there doesn't need to be). Leave the **build context
+   directory** as `/` (the repo root) -- that's where the root `Procfile`
+   and `requirements.txt` live.
+5. Service name (e.g. `deal-game-backend`), region, and under
+   **Authentication**, allow unauthenticated invocations (same reason as
+   `--allow-unauthenticated` above -- `PROFESSOR_API_KEY` is the real gate,
+   not Cloud Run's IAM).
+6. Before creating, open **Container(s), Volumes, Networking, Security**:
+   - **Variables & Secrets** tab → add `PROFESSOR_API_KEY` = a real secret
+     (or wire it to a Secret Manager secret via **Reference a Secret**
+     instead of a plain variable -- see "Rotating the professor key"
+     below).
+   - **Container** tab → memory `512 MiB`.
+   - **Revision scaling** → set **maximum instances** to `1` (and,
+     optionally, **minimum instances** to `1`) -- see "Notes and caveats"
+     below for why.
+7. **Create.** Cloud Build runs, and once it's done the service's URL is
+   shown at the top of its page -- copy it for the next part.
+
+**Then the client, the same way:**
+
+1. Cloud Run → **Create service** → **Continuously deploy from a
+   repository** → same repo/branch.
+2. **Build type: Google Cloud Buildpacks**, but this time set the **build
+   context directory** to `/client` -- that's where `client/Procfile` and
+   `client/requirements.txt` live.
+3. Service name (e.g. `deal-game-client`), same region, allow
+   unauthenticated invocations.
+4. **Variables & Secrets** tab → add `API_BASE_URL` = the backend URL you
+   copied above.
+5. **Create.**
+
+Once both exist, the client service's URL is what you hand to a professor
+and students. To tighten CORS afterward (the optional step 3 above), open
+the backend service → **Edit & deploy new revision** → **Variables &
+Secrets** → add/edit `CORS_ORIGINS` to the client's URL → **Deploy**.
+
 ## Redeploying after a code change
 
-Re-run the same `gcloud run deploy` command for whichever service changed
-(backend: step 1's command from the repo root; client: step 2's command
-from `client/`) -- `gcloud` rebuilds from the current source and rolls out
-a new revision. Environment variables you set with `--set-env-vars`
-persist across redeploys unless you explicitly change them; use
-`--update-env-vars` (as in step 3) to change just one without repeating
-all of them.
+**CLI path:** re-run the same `gcloud run deploy` command for whichever
+service changed (backend: step 1's command from the repo root; client:
+step 2's command from `client/`) -- `gcloud` rebuilds from the current
+source and rolls out a new revision. Environment variables you set with
+`--set-env-vars` persist across redeploys unless you explicitly change
+them; use `--update-env-vars` (as in step 3) to change just one without
+repeating all of them.
+
+**Console path:** nothing to do -- push to the branch you connected and
+Cloud Build redeploys it automatically. To trigger one without a new
+commit, open the service in the console and use **Edit & deploy new
+revision** → **Deploy**.
+
+## Rotating the professor key
+
+**CLI:** update the running backend service directly -- this deploys a new
+revision with the new value using the *already-built* image, no rebuild:
+
+```bash
+gcloud run services update deal-game-backend \
+  --region us-central1 \
+  --update-env-vars PROFESSOR_API_KEY=<new-secret>
+```
+
+**Console:** backend service → **Edit & deploy new revision** →
+**Variables & Secrets** → edit `PROFESSOR_API_KEY` → **Deploy**.
+
+Either way, it takes effect immediately for new requests, but anyone
+already signed in as professor in the client has the *old* key cached in
+their browser's `sessionStorage` -- they need to sign out and back in with
+the new one (starting a session works fine regardless; it's only the
+client's cached admin-key field that goes stale).
+
+For a plain env var, the key sits in your shell history / the revision's
+config in plaintext. Secret Manager avoids that and makes rotation a
+one-liner that doesn't touch the Cloud Run service config again:
+
+```bash
+# first time only: create the secret, and point the service at it
+echo -n "<a-real-secret>" | gcloud secrets create professor-api-key --data-file=-
+gcloud run services update deal-game-backend \
+  --region us-central1 \
+  --update-secrets PROFESSOR_API_KEY=professor-api-key:latest
+
+# to rotate later, just add a new version -- no service update needed
+echo -n "<newer-secret>" | gcloud secrets versions add professor-api-key --data-file=-
+```
+
+In the console, the equivalent is Secret Manager → **Create secret**, then
+back in the backend service's **Variables & Secrets** tab, **Reference a
+secret** instead of adding a plain variable.
 
 ## Notes and caveats
 
@@ -155,8 +257,7 @@ all of them.
   professor starting a session and it actually being used, that's
   equivalent to a restart. Setting `--min-instances 1` keeps one instance
   always warm for the duration of a class (small ongoing cost).
-- Neither service needs a database, Cloud Storage bucket, or Secret
-  Manager entry to work -- `--set-env-vars` is enough for a classroom
-  deployment. Secret Manager is a reasonable upgrade for
-  `PROFESSOR_API_KEY` specifically if you want to avoid it sitting in
-  shell history / deploy scripts; see Cloud Run's `--set-secrets` flag.
+- Neither service needs a database or Cloud Storage bucket to work --
+  env vars are enough for a classroom deployment. Secret Manager is an
+  optional upgrade for `PROFESSOR_API_KEY` specifically -- see "Rotating
+  the professor key" above.
