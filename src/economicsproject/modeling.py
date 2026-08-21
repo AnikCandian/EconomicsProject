@@ -109,8 +109,32 @@ def describe_collinearity(feature_columns: list[str], X: pd.DataFrame) -> str | 
     optimizer still returns *something* (it doesn't error), but which point
     on that line you get depends on the solver and its starting point, not
     on the data.
+
+    Rank is computed via SVD (``numpy.linalg.matrix_rank``), which can
+    itself fail to converge on a badly enough conditioned matrix -- e.g.
+    combining many numeric columns on wildly different scales (large
+    dollar amounts alongside 0/1 indicators) without any one-hot field
+    being fully selected at all. Caught here rather than left to escape as
+    a raw ``LinAlgError`` -- this used to crash `fit_logit_model()` before
+    reaching its own ``try/except`` a few lines down, which only wraps the
+    *fit* call, not this rank check (verified: reproduces with just
+    ``NUMERIC_USABLE_COLUMNS`` selected, no ``Industry_*`` involved at
+    all). See API_PROTOCOL.md, "Degenerate fits."
     """
-    if np.linalg.matrix_rank(X.to_numpy()) >= X.shape[1]:
+    try:
+        is_full_rank = np.linalg.matrix_rank(X.to_numpy()) >= X.shape[1]
+    except np.linalg.LinAlgError:
+        return (
+            "This variable set is numerically unstable: computing the design "
+            "matrix's rank itself failed to converge, which happens when "
+            "columns on wildly different scales (or otherwise badly "
+            "conditioned data) push the underlying linear algebra past what "
+            "it can reliably solve. Any fit on this selection -- even one "
+            "that appears to succeed -- shouldn't be trusted; the "
+            "coefficients aren't a real, reproducible answer."
+        )
+
+    if is_full_rank:
         return None
 
     culprits = fully_selected_categories(feature_columns)

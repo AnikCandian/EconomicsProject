@@ -79,8 +79,17 @@ Episode Number, Pitch Number, Multiple Entrepreneurs, US Viewership,
 Original Ask Amount, Original Offered Equity, Valuation Requested,
 Barbara Corcoran Present, Mark Cuban Present, Lori Greiner Present,
 Robert Herjavec Present, Daymond John Present, Kevin O Leary Present,
-Guest Present, Season Number, Pitchers Gender
+Season Number, Pitchers Gender
 ```
+
+`Guest Present` is deliberately **not** in this list, even though the raw
+CSV has a same-named column -- it only starts being recorded in season 15
+(part of the final hold-out, seasons 11+), so it has zero non-null values
+in both the training seasons (1-7) and the basic-test seasons (8-10). A
+model can't be trained or basic-tested against a column that's entirely
+missing in both of those ranges, so it's excluded from `USABLE_COLUMNS`
+outright rather than offered and left to fail -- see `CLAUDE.md` for the
+exact failure this used to produce.
 
 `Pitchers Gender` is genuinely numeric here, not a categorical field
 squeezed into a number: `Male` is `0.0`, `Mixed Team` is `0.5`, `Female` is
@@ -187,9 +196,19 @@ non-issue: just try again. With only 3, a lost response would mean a
 student burns an attempt and never finds out what happened. So the
 recommended client pattern is:
 
-1. `POST /finalize`. Treat the response as a hint at best — don't render it
-   directly, and don't worry if the request itself errors out (the attempt
-   may still have landed).
+1. `POST /finalize`. Treat a *successful* response as a hint at best —
+   don't render it directly. A real HTTP error response (any status code
+   at all, not a dropped connection) is different: the server received
+   the request and definitively rejected it (bad columns, an unfittable
+   design matrix, ...) — none of those cases ever reach the
+   attempt-recording step, so nothing was consumed, and retrying the
+   identical request will fail identically every time. Show that error
+   and stop; only a genuine network-level failure (the request errors out
+   with no HTTP response at all) is the truly ambiguous "maybe it landed
+   anyway" case steps 2-5 below are for. Both shipped clients used to
+   treat every error identically, which meant a definitive failure (e.g.
+   an unfittable variable combination) triggered the same endless
+   poll-then-resend loop as a lost connection, hanging the page — fixed.
 2. Immediately start polling both `GET /sessions/{code}/attempts` and
    `GET /sessions/{code}/status` every second.
 3. Keep the "submit" button disabled while polling.
@@ -321,6 +340,20 @@ silently returning an arbitrary answer — is the one case that *does* still
 come back as an error: `400` with a `detail` explaining the same thing. This
 is rare; every case we've tried, including the full-category one above,
 returns a degenerate-but-present result instead when it's fit at all.)
+
+**A design matrix can also be too ill-conditioned for `numpy` to even
+compute its rank** — this showed up in practice combining many numeric
+columns on wildly different scales (large dollar amounts alongside 0/1
+indicators), no one-hot field involved at all. `matrix_rank`'s SVD failing
+to converge used to escape `describe_collinearity()` as a raw
+`numpy.linalg.LinAlgError` before that function's own rank check even
+finished — since `numpy.linalg.LinAlgError` is a `ValueError` subclass,
+`/finalize` still came back `400` rather than `500`, but with numpy's bare
+`"SVD did not converge"` as the `detail` instead of an explanation, and no
+attempt was consumed. This is caught now: `describe_collinearity()` treats
+that failure the same as a detected rank deficiency (a plain-language
+`warning`, not a crash) and the fit is attempted anyway, same as any other
+degenerate case above.
 
 ## Model caching
 

@@ -251,6 +251,64 @@ against the final hold-out (not just each student's best) — that's what
 lets a student later see, via `GET /attempts`, which of their 3 tries
 would actually have scored best on the data nobody could see while playing.
 
+## Fixed bug: a definitive `/finalize` failure used to hang the client forever
+
+A student selecting enough numeric predictors at once (reproduces with
+just `NUMERIC_USABLE_COLUMNS`, no `Industry_*` involved) could make
+`numpy.linalg.matrix_rank()` — called inside `modeling
+.describe_collinearity()` to check for exact collinearity — fail with a
+raw `LinAlgError: SVD did not converge`. That call happened *before*
+`fit_logit_model()`'s own `try/except LinAlgError` (which only wraps the
+actual `sm.Logit(...).fit()` call, a few lines further down), so the
+exception escaped uncaught. Fixed: `describe_collinearity()` now wraps its
+own rank check and treats a non-converging SVD the same as a detected rank
+deficiency — a plain-language `warning`, not a crash — so the fit is
+attempted anyway, same as any other degenerate case (see "Degenerate
+fits" in `API_PROTOCOL.md`).
+
+Fixing that surfaced a second, worse bug right behind it: with the SVD
+crash gone, the same numeric-heavy selections instead hit
+`statsmodels.tools.sm_exceptions.MissingDataError: exog contains inf or
+nans` — not caught anywhere, and not even a `ValueError` subclass (unlike
+`LinAlgError`, which is), so it wasn't a clean `400` either, it was a raw
+`500`. Root cause traced to `"Guest Present"`: verified against the raw
+CSV, it has **zero** non-null values in both the training seasons (1-7)
+*and* the basic-test seasons (8-10) — it only starts being recorded in
+season 15, part of the final hold-out. `fit_logit_model()`'s
+mean-imputation (`train_df[feature_columns].mean()` then `fillna`) is a
+no-op when the mean itself is `NaN` (mean of an all-`NaN` column), leaving
+the whole column `NaN` in training and guaranteeing this crash on *any*
+selection that includes it — even by itself, alone. This isn't a
+degenerate-but-fittable case like the ones above; there's no valid
+training-period data to fit against at all. Fixed by removing
+`"Guest Present"` from `dataset.NUMERIC_USABLE_COLUMNS` entirely — it was
+never a legitimate choice given this project's fixed train/test season
+split, so it shouldn't have been offered in the first place. `USABLE_COLUMNS`
+drops from 32 to 31 (`client/app.py`'s `USABLE_COLUMN_COUNT` updated to
+match); check any new column the same way before adding it (`train[col]
+.notna().sum()` across the training AND basic-test season ranges, not just
+the whole dataset) if the raw CSV ever changes again.
+
+**Even with both of those fixed, the deeper bug was client-side.**
+`numpy.linalg.LinAlgError` actually *is* a `ValueError` subclass (verified
+directly), so `server.py`'s `except ValueError` in the `/finalize` handler
+already turned it into a clean `400` — the backend was never the thing
+crashing. Both clients' `postFinalize()` just caught *any* rejected POST
+identically, network failure or real HTTP error alike, and fell through
+to the poll-then-resend loop on the assumption "maybe it landed anyway."
+For a *definitive* failure (any real HTTP response, not a dropped
+connection) that assumption is simply wrong — none of these cases ever
+reach `Session.finalize()`'s attempt-recording step, so nothing was ever
+going to show up no matter how long the client polled, and the resend
+just repeated the identical failure every ~3 seconds forever. That's what
+"the app freezes" actually was: not a crash, an infinite loop with no
+error ever surfaced. Fixed: `postFinalize()` now checks `err.status` (set
+by `api.js`'s `apiRequest()` only when a real HTTP response came back,
+never on a true network-level failure) and, when present, shows the error
+and stops immediately instead of entering the poll loop at all. This is
+the general fix — it protects against *any* future definitive `/finalize`
+rejection working this way, not just these two specific causes.
+
 ## Module responsibilities (keep this modular)
 
 - `dataset.py` — the only place that knows about the raw CSV,

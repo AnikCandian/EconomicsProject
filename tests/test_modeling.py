@@ -1,6 +1,8 @@
-from economicsproject.dataset import CATEGORY_VALUES, load_prepared_dataset
-from economicsproject.modeling import describe_collinearity, fit_logit_model, score_final_test
+import pytest
 import statsmodels.api as sm
+
+from economicsproject.dataset import CATEGORY_VALUES, load_prepared_dataset
+from economicsproject.modeling import ModelFitError, describe_collinearity, fit_logit_model, score_final_test
 
 
 def test_fit_logit_model_produces_equation_and_basic_test_metrics():
@@ -37,6 +39,38 @@ def test_describe_collinearity_is_none_for_a_well_posed_design_matrix():
     X = sm.add_constant(train_df[columns], has_constant="add")
 
     assert describe_collinearity(columns, X) is None
+
+
+def test_fit_logit_model_never_raises_a_raw_linalgerror_on_all_numeric_columns():
+    # Regression test: numpy.linalg.matrix_rank's SVD used to fail to
+    # converge on this exact selection (no one-hot field involved at all)
+    # and escape describe_collinearity() as a raw LinAlgError, before
+    # fit_logit_model()'s own try/except (which only wraps the .fit() call)
+    # ever got a chance to catch it. Should now either fit with a warning,
+    # or fail cleanly as a ModelFitError -- never a bare LinAlgError.
+    from economicsproject.dataset import NUMERIC_USABLE_COLUMNS
+
+    dataset = load_prepared_dataset()
+    try:
+        fitted = fit_logit_model(NUMERIC_USABLE_COLUMNS, dataset)
+        assert fitted.equation.startswith("logit(P(Got Deal)) =")
+    except ModelFitError:
+        pass  # also an acceptable outcome -- a clean, expected failure
+
+
+def test_guest_present_is_not_a_usable_column():
+    # Regression test: "Guest Present" has zero non-null values in both the
+    # training seasons (1-7) and the basic-test seasons (8-10) -- it only
+    # starts being recorded in season 15, part of the final hold-out. Any
+    # selection including it used to guarantee an uncaught
+    # statsmodels.tools.sm_exceptions.MissingDataError (mean-imputing from
+    # an all-NaN training column is a no-op). Excluded from USABLE_COLUMNS
+    # entirely rather than offered and left to crash.
+    from economicsproject.dataset import USABLE_COLUMNS
+
+    assert "Guest Present" not in USABLE_COLUMNS
+    with pytest.raises(ValueError, match="Not usable"):
+        fit_logit_model(["Guest Present"], load_prepared_dataset())
 
 
 def test_score_final_test_uses_only_the_reserved_seasons():

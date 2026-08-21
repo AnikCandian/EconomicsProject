@@ -29,7 +29,17 @@ TARGET_COLUMN = "Got Deal"
 TRAIN_SEASONS = set(range(1, 8))
 BASIC_TEST_SEASONS = set(range(8, 11))
 
-# Plain numeric columns students can pick as variables.
+# Plain numeric columns students can pick as variables. "Guest Present" is
+# deliberately NOT here: it only starts being recorded in season 15 (part
+# of the final hold-out, seasons 11+) -- it has zero non-null values in
+# both the training seasons (1-7) and the basic-test seasons (8-10),
+# verified against the raw CSV, so its training mean is NaN and
+# fit_logit_model()'s mean-imputation is a no-op, leaving the whole column
+# NaN and guaranteeing statsmodels.tools.sm_exceptions.MissingDataError on
+# *any* selection that includes it, alone or combined with anything else.
+# Unlike a degenerate (collinear) selection, this isn't a teachable
+# moment -- it's just a column with no usable training-period data, so it's
+# excluded from the menu entirely rather than offered and left to crash.
 NUMERIC_USABLE_COLUMNS = [
     "Episode Number",
     "Pitch Number",
@@ -44,7 +54,6 @@ NUMERIC_USABLE_COLUMNS = [
     "Robert Herjavec Present",
     "Daymond John Present",
     "Kevin O Leary Present",
-    "Guest Present",
     "Season Number",
     "Pitchers Gender",
 ]
