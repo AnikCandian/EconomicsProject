@@ -14,19 +14,15 @@ against a Shark Tank deal-outcome dataset. Full API contract is in
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-2. Install dependencies:
+2. Install dependencies. This also installs the project itself in editable
+   mode (`requirements.txt` ends with `-e .`), so `economicsproject` is
+   importable without a separate step:
 
    ```bash
    pip install -r requirements-dev.txt
    ```
 
    (Use `requirements.txt` instead if you don't need dev/test tools like `pytest`.)
-
-3. Install the project in editable mode so `economicsproject` is importable:
-
-   ```bash
-   pip install -e .
-   ```
 
 ## Usage
 
@@ -52,11 +48,19 @@ python -m economicsproject.main --demo
 pytest
 ```
 
+## Deploying
+
+See [`DEPLOY.md`](DEPLOY.md) for running this backend and
+[`client/`](client/) as two Cloud Run services on Google Cloud, built
+straight from source with Google's buildpacks (no Dockerfile needed).
+
 ## Project structure
 
 ```
 .
 ├── API_PROTOCOL.md               # REST API contract for the game backend
+├── DEPLOY.md                     # Cloud Run / buildpack deployment steps
+├── Procfile                      # buildpack entry point for this backend service
 ├── src/
 │   └── economicsproject/
 │       ├── Shark Tank US dataset.csv        # raw data, never modified

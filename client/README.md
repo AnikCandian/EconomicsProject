@@ -98,10 +98,19 @@ Notes and gotchas:
 - **This is still a LAN-only setup**, not a public deployment — it works
   because everyone's on the same network the servers are bound to. Serving
   this to students outside that network (a different building, a phone on
-  cellular data) needs a real hosting setup (a cloud VM, a tunnel like
-  ngrok/Cloudflare Tunnel, etc.) and is out of scope for this dev server.
+  cellular data) needs a real hosting setup — see "Deploying" below for one
+  (Cloud Run), or a tunnel like ngrok/Cloudflare Tunnel for something
+  quicker and more temporary.
 - Same steps apply to [`../client_barebones/`](../client_barebones/) — just
   substitute its directory and default port (5001).
+
+## Deploying
+
+For something reachable outside a single Wi-Fi network (a different
+building, students on cellular data), see [`../DEPLOY.md`](../DEPLOY.md) —
+it walks through deploying this client and the backend as two Google Cloud
+Run services, built from source with a `Procfile` (`client/Procfile`) and
+no Dockerfile.
 
 ## Design origin
 
