@@ -35,7 +35,7 @@ Three credential types, sent as headers:
 |---|---|---|---|
 | Professor | `X-Professor-Key` | Set as the `PROFESSOR_API_KEY` env var before starting the server (shared secret, out of band) | `POST /sessions` only |
 | Host (that professor's session) | `X-Host-Token` | Response of `POST /sessions` | `GET /sessions/{code}/dashboard`, `POST /sessions/{code}/stop` |
-| Student | `X-Student-Token` | Response of `POST /sessions/{code}/join` | `POST /sessions/{code}/finalize`, `GET /sessions/{code}/attempts`, `GET /sessions/{code}/status`, and (deprecated) `POST /sessions/{code}/explore` |
+| Student | `X-Student-Token` | Response of `POST /sessions/{code}/join` | `POST /sessions/{code}/finalize`, `GET /sessions/{code}/attempts`, `POST /sessions/{code}/attempts/collapse-duplicate`, `GET /sessions/{code}/status`, and (deprecated) `POST /sessions/{code}/explore` |
 
 `X-Professor-Key` gates who may create a session at all. Once a session
 exists, its own `host_token` is sufficient to control it — the professor key
@@ -79,8 +79,15 @@ Episode Number, Pitch Number, Multiple Entrepreneurs, US Viewership,
 Original Ask Amount, Original Offered Equity, Valuation Requested,
 Barbara Corcoran Present, Mark Cuban Present, Lori Greiner Present,
 Robert Herjavec Present, Daymond John Present, Kevin O Leary Present,
-Guest Present, Season Number
+Guest Present, Season Number, Pitchers Gender
 ```
+
+`Pitchers Gender` is genuinely numeric here, not a categorical field
+squeezed into a number: `Male` is `0.0`, `Mixed Team` is `0.5`, `Female` is
+`1.0` (`dataset.PITCHERS_GENDER_VALUES`). This is a deliberate choice, not
+a shortcut -- see `CLAUDE.md`, "Pitchers Gender is continuous, not
+one-hot," for the reasoning. It's the only field encoded this way; every
+other categorical field is one-hot (below).
 
 **One-hot category values, each individually selectable.** Students pick out
 specific categories — e.g. `"Industry_Travel"` — not the parent field as a
@@ -93,14 +100,18 @@ Naming convention: `<OriginalHeader>_<DiscreteValue>`.
   Children/Education, Health/Wellness, Technology/Software, Pet Products,
   Business Services, Media/Entertainment, Uncertain/Other, Electronics,
   Automotive, Green/CleanTech, Liquor/Alcohol, Travel
-- **Pitchers Gender** (3 values → 3 columns `Pitchers Gender_Male`,
-  `Pitchers Gender_Female`, `Pitchers Gender_Mixed Team`)
+
+This is currently the *only* one-hot field -- see above for why
+`Pitchers Gender` isn't one.
 
 Picking a **subset** of a field's categories (e.g. just `Industry_Travel`
 and `Industry_Automotive`) is fine. Picking **every** category of the same
-field at once is *allowed* — deliberately not rejected, see "Degenerate
-fits" below — but the resulting model is numerically meaningless, and the
-response says so via a `warning` field.
+field at once is rejected by `POST /finalize` outright (`status:
+"invalid_selection"`, no attempt consumed) -- see "Attempts" and
+"Degenerate fits" below. The deprecated `POST /explore` and
+`modeling.fit_logit_model()` used directly still allow it and report the
+numerical problem via a `warning` field instead, since it's still an
+instructive thing to see fit outside the scored game.
 
 `POST /sessions/{code}/join` echoes three things so a frontend can build its
 variable picker without hardcoding any of this:
@@ -167,31 +178,54 @@ deleted**: it's still fully functional (see its endpoint doc below) so this
 is a one-line revert if that turns out to be the wrong call, but neither
 shipped client calls it any more.
 
-**Why the client should poll `GET /attempts` instead of trusting the
-`POST /finalize` response.** An attempt is recorded server-side the moment
-`/finalize` computes it — regardless of whether the HTTP response carrying
-that result actually makes it back to the student's browser (a dropped
-connection, a closed tab, flaky classroom wifi). With unlimited attempts
-that was a non-issue: just try again. With only 3, a lost response would
-mean a student burns an attempt and never finds out what happened. So the
+**Why the client should poll instead of trusting the `POST /finalize`
+response.** An attempt is recorded server-side the moment `/finalize`
+computes it — regardless of whether the HTTP response carrying that result
+actually makes it back to the student's browser (a dropped connection, a
+closed tab, flaky classroom wifi). With unlimited attempts that was a
+non-issue: just try again. With only 3, a lost response would mean a
+student burns an attempt and never finds out what happened. So the
 recommended client pattern is:
 
 1. `POST /finalize`. Treat the response as a hint at best — don't render it
    directly, and don't worry if the request itself errors out (the attempt
    may still have landed).
-2. Immediately start polling `GET /sessions/{code}/attempts` every second.
+2. Immediately start polling both `GET /sessions/{code}/attempts` and
+   `GET /sessions/{code}/status` every second.
 3. Keep the "submit" button disabled while polling.
-4. Once the poll's `attempts_used` reflects the new attempt, stop polling,
-   render from *that* response, and re-enable submission if
-   `attempts_remaining > 0`.
+4. Once a poll's `attempts_used` reflects the new attempt, or
+   `last_invalid_selection` shows the submission was rejected, stop
+   polling, render from that response, and re-enable submission if
+   attempts remain.
+5. **If 3 consecutive polls (~3 seconds) show neither**, resend the
+   identical `POST /finalize` and keep polling. Steps 1-4 alone only cover
+   the *response* getting lost after a successful `/finalize` — they do
+   nothing if the original POST never reached the server at all (a more
+   common failure on real classroom wifi than a lost response), which
+   would otherwise leave a student staring at "Submitted..." forever with
+   no way to know something went wrong. This resend is a plain retry, not
+   a different request — if the *original* POST actually did land and only
+   step 5 fired because the polls themselves were delayed, this creates a
+   second, genuine attempt with identical variables.
+6. **After a resend, once polling resolves, call
+   `POST /sessions/{code}/attempts/collapse-duplicate`.** This is the
+   cleanup for step 5's rare duplicate: if the two most recent attempts
+   really are identical and close together in time, the server removes the
+   extra one and hands the freed attempt back. If step 5 never fired, or
+   the original genuinely never landed (so there's nothing to collapse),
+   this call is a harmless no-op — see its own section below. Neither
+   shipped client puts this behind a button; it's called automatically as
+   part of the same retry logic, never something a student triggers
+   directly.
 
-`GET /attempts` is idempotent and cheap (a dict lookup, no computation), so
-polling it is safe to retry indefinitely and imposes no meaningful load.
-This "don't trust the POST, confirm via GET" pattern is a client-side
-convention, not something the server enforces — the server's only real
-rule is the count itself: the 4th `finalize` call (and beyond) returns
-`status: "attempts_exhausted"` with the *3rd* attempt's data unchanged, it
-does not error and does not silently accept a 4th submission.
+`GET /attempts` and `GET /status` are both idempotent and cheap (a dict
+lookup, no computation), so polling either is safe to retry indefinitely
+and imposes no meaningful load. This "don't trust the POST, confirm via
+GET" pattern (including the resend) is a client-side convention, not
+something the server enforces — the server's only real rule is the count
+itself: the 4th `finalize` call (and beyond) returns `status:
+"attempts_exhausted"` with the *3rd* attempt's data unchanged, it does not
+error and does not silently accept a 4th submission.
 
 **What counts as "current standing."** With multiple attempts, a student's
 position on the professor's dashboard and on both final leaderboards is
@@ -204,8 +238,8 @@ strategy would have scored best on the (eventually revealed) final test.
 **Rejected selections don't consume an attempt either.** `POST /finalize`
 has a third outcome besides `"ok"` and `"attempts_exhausted"`:
 `"invalid_selection"` — a student selected every category of one or more
-one-hot fields at once (the dummy-variable trap; see "Degenerate fits"
-below for why that's unsolvable, not just unwise). The exhaustion count is
+one-hot fields at once (see "Degenerate fits" below for why that's
+unsolvable, not just unwise). The exhaustion count is
 still checked first (an already-exhausted student's selection is never
 even looked at); an `invalid_selection` is then caught right after, before
 any fit is attempted, so a still-eligible student never loses an attempt to
@@ -239,7 +273,7 @@ attempt consumed, and a short explanation in `message`:
   "max_attempts": 3,
   "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
   "culprit_categories": ["Industry"],
-  "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+  "message": "Can't build a model with every Industry option selected — selecting every one-hot encoded option for a category creates perfect multicollinearity. Deselect at least one Industry option and try again.",
   "attempted_at": 1732500000.0
 }
 ```
@@ -367,15 +401,13 @@ A student joins a session with their name.
 {
   "student_id": "S1",
   "student_token": "50JH2u0kZBypwz3YiVjidVKEpwPbKqR4",
-  "usable_columns": ["Episode Number", "Pitch Number", "...", "Industry_Food and Beverage", "Industry_Travel", "..."],
+  "usable_columns": ["Episode Number", "Pitch Number", "...", "Pitchers Gender", "Industry_Food and Beverage", "Industry_Travel", "..."],
   "categories": {
-    "Industry": ["Food and Beverage", "Lifestyle/Home", "..."],
-    "Pitchers Gender": ["Male", "Female", "Mixed Team"]
+    "Industry": ["Food and Beverage", "Lifestyle/Home", "..."]
   },
   "dummy_column_category": {
     "Industry_Food and Beverage": "Industry",
     "Industry_Travel": "Industry",
-    "Pitchers Gender_Female": "Pitchers Gender",
     "...": "..."
   },
   "max_attempts": 3
@@ -488,7 +520,7 @@ consumed; `attempts_used`/`attempts_remaining` reflect this student's
   "max_attempts": 3,
   "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
   "culprit_categories": ["Industry"],
-  "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+  "message": "Can't build a model with every Industry option selected — selecting every one-hot encoded option for a category creates perfect multicollinearity. Deselect at least one Industry option and try again.",
   "attempted_at": 1732500000.0
 }
 ```
@@ -499,7 +531,7 @@ this is a genuine hold-out; nothing here reveals it early.
 **Errors:** `400` if any name in `variables` isn't in `USABLE_COLUMNS`, or if
 statsmodels itself fails to fit at all (rare -- see "Degenerate fits"). Note:
 an exhausted student's `variables` are never even looked at -- neither
-validated nor checked for the dummy-variable trap (there's no attempt left
+validated nor checked for a fully-selected one-hot field (there's no attempt left
 to spend on them) -- so a bad or invalid column list from a student with 0
 attempts remaining still comes back `attempts_exhausted`, not `400` or
 `invalid_selection`. `401` bad/missing student token; `404` unknown
@@ -546,6 +578,67 @@ Each entry's `final_test` stays `null` until the session is stopped, then
 gets filled in for *every* attempt (not just the best one) — this is how a
 student sees which of their 3 tries would actually have done best on the
 data nobody saw.
+
+**Errors:** `401` bad/missing student token; `404` unknown session.
+
+---
+
+### `POST /sessions/{code}/attempts/collapse-duplicate`
+
+Not exposed by either shipped client's UI — a client's own
+retry-after-3-stalled-polls logic calls this automatically (see
+"Attempts" above, step 6) after noticing more attempts landed than
+expected. Removes this student's most recent attempt if, and only if, it
+has *identical* variables to the one right before it, submitted within
+`DUPLICATE_COLLAPSE_WINDOW_SECONDS` (currently 30s) of each other.
+
+This is deliberately narrow, not a general "undo my last attempt" tool —
+see `CLAUDE.md`, "three attempts, confirmed via polling," for why a
+general version would be exploitable (finalize → withdraw → finalize again
+for effectively unlimited real attempts) even with no client-side button,
+since a student's own token is a legitimate credential for this endpoint
+regardless of how they call it. Collapsing an exact duplicate can't be
+used that way: two attempts with identical variables score identically
+(same cached fit), so removing one changes nothing about the student's
+best score — there's no way to spend it discarding a bad attempt for a
+free retry.
+
+**Headers:** `X-Student-Token: <token>`
+
+**Response** `200` (an eligible duplicate was found and removed):
+```json
+{
+  "status": "withdrawn",
+  "attempts_used": 1,
+  "attempts_remaining": 2,
+  "max_attempts": 3,
+  "student_id": "S1",
+  "full_name": "Ada Lovelace",
+  "attempt_number": 1,
+  "variables": ["Industry_Travel"],
+  "equation": "...",
+  "basic_test": { "accuracy": 0.658, "yes_deal_accuracy": 1.0, "no_deal_accuracy": 0.0, "sample_size": 284 },
+  "final_test": null,
+  "warning": null,
+  "finalized_at": 1787121482.58
+}
+```
+
+**Response** `200` (nothing eligible to collapse — fewer than 2 attempts,
+the two most recent have different variables, they're more than
+`DUPLICATE_COLLAPSE_WINDOW_SECONDS` apart, or the session has closed):
+```json
+{
+  "status": "not_eligible",
+  "attempts_used": 1,
+  "attempts_remaining": 2,
+  "max_attempts": 3
+}
+```
+
+Both shapes are `200` — "nothing to collapse" is the expected common case
+(most submissions never trigger the resend that could create a duplicate
+in the first place), not an error condition.
 
 **Errors:** `401` bad/missing student token; `404` unknown session.
 
@@ -642,15 +735,15 @@ rejected for selecting every category of a one-hot field, in case the
 ```
 
 Or, if this student's most recent `/finalize` call (or their most recent
-one at the time this was polled) was rejected as a dummy-variable-trap
-selection:
+one at the time this was polled) was rejected for selecting a full one-hot
+category:
 ```json
 {
   "status": "open",
   "last_invalid_selection": {
     "variables": ["Industry_Automotive", "...", "Industry_Uncertain/Other"],
     "culprit_categories": ["Industry"],
-    "message": "Can't build a model with every Industry option selected — that's the dummy variable trap (perfect multicollinearity from one-hot encoding). Deselect at least one Industry option and try again.",
+    "message": "Can't build a model with every Industry option selected — selecting every one-hot encoded option for a category creates perfect multicollinearity. Deselect at least one Industry option and try again.",
     "attempted_at": 1732500000.0
   }
 }

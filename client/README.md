@@ -152,10 +152,16 @@ rather than faked:
   real the moment "Start session" is clicked.
 - **Predictor list.** The mockup hardcodes 33 fictional predictors
   (including a `Business Description` column the real dataset doesn't
-  expose as usable). The real 34 come from `/join`'s response instead, and
-  "Pitchers Gender" is its own group of 3 individually-selectable toggles
-  rather than one collapsed toggle — matching the backend's
-  individually-selectable-category design (see the repo root `CLAUDE.md`).
+  expose as usable). The real 32 come from `/join`'s response instead.
+  Every one-hot field (currently just "Industry") is a group of
+  individually-selectable toggles rather than one collapsed toggle,
+  matching the backend's individually-selectable-category design (see the
+  repo root `CLAUDE.md`); "Pitchers Gender" is a single numeric predictor,
+  not one of those groups — see `CLAUDE.md`, "Pitchers Gender is
+  continuous, not one-hot," for why. Each toggle in a one-hot group shows
+  just the value ("Travel"), not the full submitted column name
+  ("Industry_Travel") — the full name is still what's actually sent, only
+  the on-screen label is shortened.
 - **Role separation.** The mockup lets one demo user freely switch between
   "Model builder" and "Monitoring" in a shared nav. The real backend has
   genuinely different tokens for each role (a student token can't call the
@@ -178,17 +184,28 @@ polling, not one submission with live preview," and `API_PROTOCOL.md`,
   `deprecated=True`, functional for rollback) but `builder.js` never calls
   it. There's no more debounced live-fit-on-checkbox-change — checkboxes
   just accumulate a selection.
+- Selecting every value of a one-hot field is never sent to the server at
+  all — `builder.js` checks it live as boxes
+  are toggled (`fullySelectedCategories()` in `api.js`) and shows a short
+  banner instead of letting "Submit attempt" fire. The "All" toggle button
+  is also just not rendered for a one-hot category group, since bulk-
+  selecting it is guaranteed to trigger that same rejection.
 - "Submit attempt" calls `POST /finalize`, which scores for real and
   consumes one of 3 attempts. The response to that POST is **not trusted
   on its own** — after sending it, the page disables the form and polls
-  `GET /sessions/{code}/attempts` every 1 second until the attempt count it
-  returns has actually gone up, then re-enables the form (or shows the
-  "no attempts left" banner if that was the 3rd). This protects against a
-  dropped/lost HTTP response after the attempt was already consumed
-  server-side — the poll is the source of truth, not the POST's response
-  body. This lock is purely client-side convention, per how the game is
-  meant to be played; the server does not itself block a 4th `/finalize`
-  call while a poll is in flight, it only ever enforces the 3-attempt cap.
+  both `GET /sessions/{code}/attempts` (did the attempt count go up?) and
+  `GET /sessions/{code}/status` (was it rejected instead?) every 1 second
+  until one of those resolves, then re-enables the form (or shows the
+  relevant banner). This protects against a dropped/lost HTTP response
+  after the attempt was already consumed server-side — the poll is the
+  source of truth, not the POST's response body. If 3 polls in a row show
+  neither, the client resends the identical POST rather than leaving the
+  page stuck on "Submitted..." forever — see `CLAUDE.md`, "three attempts,
+  confirmed via polling," for why that's a deliberate trade (an occasional
+  harmless duplicate attempt, over a client that silently hangs). This
+  lock is purely client-side convention, per how the game is meant to be
+  played; the server does not itself block a 4th `/finalize` call while a
+  poll is in flight, it only ever enforces the 3-attempt cap.
 - The "Your attempts" table on `/play` is populated straight from
   `GET /attempts`, which always returns every attempt so far (not just the
   best) — variables, accuracy, yes-deal %, no-deal %, and (once the session

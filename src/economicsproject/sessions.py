@@ -25,11 +25,17 @@ import time
 from dataclasses import dataclass, field
 
 from .cache import ModelCache
-from .dataset import PreparedDataset, dummy_variable_trap_message, fully_selected_categories, validate_variable_selection
+from .dataset import PreparedDataset, fully_selected_categories, one_hot_collinearity_message, validate_variable_selection
 from .modeling import ConfusionMetrics, score_final_test
 
 SESSION_CODE_LENGTH = 6
 MAX_ATTEMPTS = 3  # per student, per session
+
+# How close together (in seconds) a student's two most recent attempts have
+# to be, on top of having identical variables, to be treated as an
+# accidental duplicate eligible for Session.collapse_duplicate_attempt().
+# See that method's docstring for why this doesn't reopen the 3-attempt cap.
+DUPLICATE_COLLAPSE_WINDOW_SECONDS = 30
 
 
 class SessionError(Exception):
@@ -82,9 +88,9 @@ class Submission:
 
 @dataclass
 class InvalidSelection:
-    """A rejected finalize() attempt: every category of one or more one-hot
-    fields was selected at once (the dummy-variable trap -- see
-    dataset.fully_selected_categories). Doesn't consume an attempt. Recorded
+    """A rejected finalize() attempt: every one-hot category of one or more
+    fields was selected at once (see dataset.fully_selected_categories).
+    Doesn't consume an attempt. Recorded
     per-student so GET /status can surface it to a client whose /finalize
     response never arrived -- the same lost-response problem that
     GET /attempts solves for successful submissions (see API_PROTOCOL.md,
@@ -150,10 +156,10 @@ class Session:
             return max(attempts, key=lambda sub: sub.basic_test.accuracy) if attempts else None
 
     def invalid_selection_for(self, token: str) -> InvalidSelection | None:
-        """This student's most recent rejected (dummy-variable-trap)
-        finalize() attempt, if any -- what GET /status surfaces so a client
-        can learn a submission was rejected even if the /finalize response
-        itself never arrived."""
+        """This student's most recent rejected (full-category, one-hot
+        collinearity) finalize() attempt, if any -- what GET /status
+        surfaces so a client can learn a submission was rejected even if
+        the /finalize response itself never arrived."""
         with self._lock:
             return self._invalid_selections.get(token)
 
@@ -177,11 +183,11 @@ class Session:
           their most recent Submission, unchanged. Checked first, before
           any validation, so an exhausted student's input is never even
           looked at -- it wouldn't be used anyway.
-        - "invalid_selection" -- every category of one or more one-hot
-          fields was selected at once (the dummy-variable trap). Rejected
-          before any fit is attempted and doesn't consume an attempt. See
-          dataset.fully_selected_categories and API_PROTOCOL.md,
-          "Attempts."
+        - "invalid_selection" -- every one-hot category of one or more
+          fields was selected at once (perfectly collinear with the
+          intercept). Rejected before any fit is attempted and doesn't
+          consume an attempt. See dataset.fully_selected_categories and
+          API_PROTOCOL.md, "Attempts."
         Raises ValueError for any other unusable variable name.
         """
         student = self.student_for_token(token)
@@ -198,7 +204,7 @@ class Session:
             invalid = InvalidSelection(
                 variables=sorted(set(variables)),
                 culprit_categories=culprits,
-                message=dummy_variable_trap_message(culprits),
+                message=one_hot_collinearity_message(culprits),
             )
             with self._lock:
                 self._invalid_selections[token] = invalid
@@ -226,6 +232,44 @@ class Session:
             )
             existing.append(submission)
             return submission, "ok"
+
+    def collapse_duplicate_attempt(self, token: str) -> tuple[Submission | None, str]:
+        """Undo an accidental duplicate attempt, if this student's two most
+        recent attempts are eligible. Returns (result, status):
+        - "withdrawn" -- the most recent attempt was removed (it had
+          identical variables to the one before it, submitted within
+          DUPLICATE_COLLAPSE_WINDOW_SECONDS); returns the kept attempt.
+        - "not_eligible" -- nothing changed (fewer than 2 attempts,
+          different variables, outside the time window, or the session has
+          closed); returns None. A no-op, not an error -- safe to call
+          speculatively.
+
+        This exists specifically for the rare case a client's own
+        retry-after-3-stalled-polls logic (see API_PROTOCOL.md, "Attempts")
+        creates: the original `/finalize` POST *and* its resend both
+        actually land, consuming 2 attempts for what was meant to be one
+        submission. Deliberately NOT a general "undo any attempt" tool --
+        it's a strict no-op for the student's standing, since two attempts
+        with identical variables score identically (same cached fit), so
+        it can't be used to discard a bad attempt and get a free do-over.
+        Neither shipped client exposes this through its UI; a client's own
+        retry logic calls it automatically after noticing more attempts
+        landed than it expected, never a student clicking a button.
+        """
+        self.student_for_token(token)
+        with self._lock:
+            if self.status != "open":
+                return None, "not_eligible"
+            attempts = self._attempts.get(token, [])
+            if len(attempts) < 2:
+                return None, "not_eligible"
+            latest, previous = attempts[-1], attempts[-2]
+            same_variables = set(latest.variables) == set(previous.variables)
+            within_window = abs(latest.finalized_at - previous.finalized_at) <= DUPLICATE_COLLAPSE_WINDOW_SECONDS
+            if not (same_variables and within_window):
+                return None, "not_eligible"
+            attempts.pop()
+            return previous, "withdrawn"
 
     def dashboard(self) -> dict:
         """What the professor's periodic poll receives. Each leaderboard

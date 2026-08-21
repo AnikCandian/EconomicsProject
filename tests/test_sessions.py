@@ -2,7 +2,13 @@ import pytest
 
 from economicsproject.cache import ModelCache
 from economicsproject.dataset import load_prepared_dataset
-from economicsproject.sessions import MAX_ATTEMPTS, SessionClosedError, SessionStore, UnknownStudentError
+from economicsproject.sessions import (
+    DUPLICATE_COLLAPSE_WINDOW_SECONDS,
+    MAX_ATTEMPTS,
+    SessionClosedError,
+    SessionStore,
+    UnknownStudentError,
+)
 
 
 @pytest.fixture
@@ -182,3 +188,74 @@ def test_close_is_idempotent(store):
     second = session.close()
 
     assert first is second
+
+
+def test_collapse_duplicate_attempt_removes_an_identical_recent_repeat(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    session.finalize(student.token, ["Industry_Travel"])
+    session.finalize(student.token, ["Industry_Travel"])  # identical, submitted right after
+
+    kept, status = session.collapse_duplicate_attempt(student.token)
+
+    assert status == "withdrawn"
+    assert kept.attempt_number == 1
+    remaining = session.attempts_for(student.token)
+    assert len(remaining) == 1
+    assert remaining[0] is kept
+
+    # a fresh attempt afterward is #2, not #3 -- the slot was really freed
+    submission, ok_status = session.finalize(student.token, ["Original Ask Amount"])
+    assert ok_status == "ok"
+    assert submission.attempt_number == 2
+
+
+def test_collapse_duplicate_attempt_is_a_noop_with_fewer_than_two_attempts(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    assert session.collapse_duplicate_attempt(student.token) == (None, "not_eligible")
+
+    session.finalize(student.token, ["Industry_Travel"])
+    assert session.collapse_duplicate_attempt(student.token) == (None, "not_eligible")
+    assert len(session.attempts_for(student.token)) == 1  # untouched
+
+
+def test_collapse_duplicate_attempt_is_a_noop_when_variables_differ(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    session.finalize(student.token, ["Industry_Travel"])
+    session.finalize(student.token, ["Original Ask Amount"])  # a real, different attempt
+
+    kept, status = session.collapse_duplicate_attempt(student.token)
+
+    assert (kept, status) == (None, "not_eligible")
+    assert len(session.attempts_for(student.token)) == 2  # both kept
+
+
+def test_collapse_duplicate_attempt_is_a_noop_outside_the_time_window(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    session.finalize(student.token, ["Industry_Travel"])
+    session.finalize(student.token, ["Industry_Travel"])
+
+    # push the two attempts apart in time, past the eligible window
+    attempts = session.attempts_for(student.token)
+    attempts[0].finalized_at -= DUPLICATE_COLLAPSE_WINDOW_SECONDS + 5
+
+    kept, status = session.collapse_duplicate_attempt(student.token)
+
+    assert (kept, status) == (None, "not_eligible")
+    assert len(session.attempts_for(student.token)) == 2  # both kept
+
+
+def test_collapse_duplicate_attempt_is_a_noop_after_close(store):
+    session = store.create()
+    student = session.join("Ada Lovelace")
+    session.finalize(student.token, ["Industry_Travel"])
+    session.finalize(student.token, ["Industry_Travel"])
+    session.close()
+
+    kept, status = session.collapse_duplicate_attempt(student.token)
+
+    assert (kept, status) == (None, "not_eligible")
+    assert len(session.attempts_for(student.token)) == 2  # untouched

@@ -3,6 +3,7 @@ import pytest
 from economicsproject.dataset import (
     CATEGORY_VALUES,
     NUMERIC_USABLE_COLUMNS,
+    PITCHERS_GENDER_VALUES,
     PREPARED_DATA_PATH,
     USABLE_COLUMNS,
     fully_selected_categories,
@@ -17,13 +18,28 @@ def test_every_category_value_is_individually_selectable():
     assert "Industry" not in dataset.frame.columns  # not a real column any more
     assert "Industry_Travel" in USABLE_COLUMNS
     assert "Industry_Travel" in dataset.frame.columns
-    assert "Pitchers Gender_Female" in USABLE_COLUMNS
-    assert "Pitchers Gender_Female" in dataset.frame.columns
 
     # every category value gets its own column -- none dropped as a baseline
     for column, values in CATEGORY_VALUES.items():
         for value in values:
             assert f"{column}_{value}" in dataset.frame.columns
+
+
+def test_pitchers_gender_is_a_single_continuous_column_not_one_hot():
+    dataset = load_prepared_dataset()
+
+    assert "Pitchers Gender" in USABLE_COLUMNS
+    assert "Pitchers Gender" in NUMERIC_USABLE_COLUMNS
+    assert "Pitchers Gender" not in CATEGORY_VALUES
+    assert "Pitchers Gender" in dataset.frame.columns
+    # not one-hot -- no per-value dummy columns
+    assert "Pitchers Gender_Male" not in dataset.frame.columns
+    assert "Pitchers Gender_Female" not in dataset.frame.columns
+    assert "Pitchers Gender_Mixed Team" not in dataset.frame.columns
+
+    assert PITCHERS_GENDER_VALUES == {"Male": 0.0, "Mixed Team": 0.5, "Female": 1.0}
+    observed = set(dataset.frame["Pitchers Gender"].dropna().unique())
+    assert observed <= {0.0, 0.5, 1.0}
 
 
 def test_usable_columns_is_numeric_columns_plus_every_category_value():

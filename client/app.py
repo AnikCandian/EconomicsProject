@@ -32,7 +32,7 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 #   from economicsproject.dataset import load_prepared_dataset, USABLE_COLUMNS, TARGET_COLUMN
 #   ds = load_prepared_dataset(); train, _, _ = ds.split_by_season()
 #   len(USABLE_COLUMNS), round(train[TARGET_COLUMN].mean() * 100, 1)
-USABLE_COLUMN_COUNT = 34
+USABLE_COLUMN_COUNT = 32
 TRAIN_BASE_RATE = 52.0
 
 
