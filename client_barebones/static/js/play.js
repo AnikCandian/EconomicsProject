@@ -5,11 +5,12 @@
 // trusting the POST response alone. Up to 3 attempts per session.
 //
 // Selecting every category of one one-hot field at once (e.g. all 16
-// Industry values) is never sent to the server -- it's the dummy-variable
-// trap (perfect multicollinearity) and can't produce a usable model. The
-// server enforces the same rule independently and never counts it as an
-// attempt; GET /status's last_invalid_selection is how this client learns
-// about a rejection if the /finalize response itself was lost.
+// Industry values) is never sent to the server -- those columns are
+// perfectly collinear with the intercept and can't produce a usable
+// model. The server enforces the same rule independently and never counts
+// it as an attempt; GET /status's last_invalid_selection is how this
+// client learns about a rejection if the /finalize response itself was
+// lost.
 
 const sessionCode = localStorage.getItem("dealGame.sessionCode");
 const studentToken = localStorage.getItem("dealGame.studentToken");
@@ -86,7 +87,7 @@ function setInvalidSelectionBanner(message) {
 // API_PROTOCOL.md, "Attempts", (a)).
 function updateInvalidSelectionUi() {
   const culprits = fullySelectedCategories(selectedVariables(), categories);
-  setInvalidSelectionBanner(culprits.length > 0 ? dummyVariableTrapMessage(culprits) : "");
+  setInvalidSelectionBanner(culprits.length > 0 ? oneHotCollinearityMessage(culprits) : "");
 }
 
 // A rejection the server logged for us (either the direct /finalize
@@ -168,6 +169,30 @@ async function refreshAttempts() {
   return data;
 }
 
+// POST /finalize once. Returns true if the confirm-poll loop below should
+// stop (the response itself already told us the outcome), false if the
+// caller should keep polling to find out.
+async function postFinalize(variables) {
+  try {
+    const response = await apiRequest(`/sessions/${sessionCode}/finalize`, {
+      method: "POST",
+      headers: { "X-Student-Token": studentToken },
+      body: { variables },
+    });
+    if (response.status === "invalid_selection") {
+      // Shouldn't normally happen since (a) already blocked it -- but
+      // handle the direct response too, e.g. if `categories` went stale.
+      handleInvalidSelectionResult(response);
+      return true;
+    }
+  } catch (err) {
+    // Even on a network error the attempt may have landed server-side --
+    // fall through to polling rather than assuming it didn't.
+    console.warn("finalize request failed, confirming via polling instead:", err.message);
+  }
+  return false;
+}
+
 document.getElementById("submit-btn").addEventListener("click", async () => {
   const variables = selectedVariables();
   if (variables.length === 0) return alert("Select at least one variable first.");
@@ -176,7 +201,7 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
   // enforces, checked here first so it's blocked before any request goes out.
   const culprits = fullySelectedCategories(variables, categories);
   if (culprits.length > 0) {
-    setInvalidSelectionBanner(dummyVariableTrapMessage(culprits));
+    setInvalidSelectionBanner(oneHotCollinearityMessage(culprits));
     return;
   }
 
@@ -188,28 +213,22 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
   setInvalidSelectionBanner("");
   document.getElementById("pending-banner").hidden = false;
 
-  try {
-    const response = await apiRequest(`/sessions/${sessionCode}/finalize`, {
-      method: "POST",
-      headers: { "X-Student-Token": studentToken },
-      body: { variables },
-    });
-    if (response.status === "invalid_selection") {
-      // Shouldn't normally happen since (a) already blocked it -- but
-      // handle the direct response too, e.g. if `categories` went stale.
-      handleInvalidSelectionResult(response);
-      return;
-    }
-  } catch (err) {
-    // Even on a network error the attempt may have landed server-side --
-    // fall through to polling rather than assuming it didn't.
-    console.warn("finalize request failed, confirming via polling instead:", err.message);
-  }
+  if (await postFinalize(variables)) return;
 
   // Poll every second until either the attempt count reflects the new
   // attempt, or /status reports the submission was rejected as an invalid
-  // (dummy-variable-trap) selection -- either way, this is the
-  // authoritative source of truth, not the POST response above. (b)
+  // (full-category, one-hot collinearity) selection -- either way, this is
+  // the authoritative source of truth, not the POST response above. (b)
+  //
+  // If 3 polls in a row show neither -- the original POST may never have
+  // reached the server at all, not just its response getting lost -- resend
+  // it rather than leaving the student staring at "Submitted..." forever.
+  // If it turns out the *original* POST actually did land too (just slowly),
+  // this resend creates a genuine second attempt with identical variables --
+  // didResend tracks that so the resolve step below can try to collapse it
+  // back down to one, via a call the student never sees or triggers directly.
+  let ticksSinceLastPost = 0;
+  let didResend = false;
   confirmPollHandle = setInterval(async () => {
     try {
       const statusData = await apiRequest(`/sessions/${sessionCode}/status`, {
@@ -220,12 +239,33 @@ document.getElementById("submit-btn").addEventListener("click", async () => {
         handleInvalidSelectionResult(invalid);
         return;
       }
-      const data = await refreshAttempts();
+      let data = await refreshAttempts();
       if (data.attempts_used >= expectedCount) {
         clearInterval(confirmPollHandle);
         confirmPollHandle = null;
+        if (didResend) {
+          try {
+            const collapsed = await apiRequest(`/sessions/${sessionCode}/attempts/collapse-duplicate`, {
+              method: "POST",
+              headers: { "X-Student-Token": studentToken },
+            });
+            if (collapsed.status === "withdrawn") data = await refreshAttempts();
+          } catch (err) {
+            console.error("collapse-duplicate failed:", err);
+          }
+        }
         document.getElementById("pending-banner").hidden = true;
         if (data.attempts_remaining > 0) setFormDisabled(false);
+        return;
+      }
+      ticksSinceLastPost += 1;
+      if (ticksSinceLastPost >= 3) {
+        ticksSinceLastPost = 0;
+        didResend = true;
+        if (await postFinalize(variables)) {
+          clearInterval(confirmPollHandle);
+          confirmPollHandle = null;
+        }
       }
     } catch (err) {
       console.error(err);

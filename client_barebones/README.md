@@ -56,14 +56,27 @@ deprecated, for rollback) but this client never calls it — there's no live
 fit-as-you-check-boxes preview. `play.js` only calls `POST /finalize`
 ("Submit attempt"), which is scored for real and consumes one of 3
 attempts. After that POST, the page doesn't trust the response by itself:
-it disables the form and polls `GET /sessions/{code}/attempts` every 1
-second until the returned attempt count has actually increased, then
-re-enables the form (or shows the exhausted banner on the 3rd). This
-guards against a dropped HTTP response after the attempt was already
-consumed server-side. It's a client-side-only lock — the server enforces
-the 3-attempt cap regardless, not "wait for a poll before resubmitting."
-See the repo root `CLAUDE.md` and `API_PROTOCOL.md`, "Attempts," for the
-full rationale.
+it disables the form and polls both `GET /sessions/{code}/attempts` (did
+the attempt count go up?) and `GET /sessions/{code}/status` (was it
+rejected instead?) every 1 second until one of those resolves, then
+re-enables the form (or shows the relevant banner). This guards against a
+dropped HTTP response after the attempt was already consumed server-side.
+If 3 polls in a row show neither, the client resends the identical POST —
+the original request may never have reached the server at all, not just
+its response getting lost, and that would otherwise leave the page stuck
+on "Submitted..." forever. This is a plain retry, not a different request,
+so if the original POST actually did land, this creates a second, genuine
+attempt with the same variables; that's an accepted trade for not leaving
+students stuck with no feedback. It's all client-side-only behavior — the
+server enforces the 3-attempt cap regardless, not "wait for a poll before
+resubmitting." See the repo root `CLAUDE.md` and `API_PROTOCOL.md`,
+"Attempts," for the full rationale.
+
+Selecting every value of a one-hot field (currently just "Industry") is
+never sent to the server at all -- `play.js` checks it live as boxes are
+(un)checked (`fullySelectedCategories()` in `api.js`) and shows a short
+banner instead of letting "Submit attempt" fire. The server enforces the
+same rule independently in case that check is ever bypassed.
 
 ## Notes
 

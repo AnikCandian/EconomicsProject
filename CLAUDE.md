@@ -43,8 +43,10 @@ revealed against a hold-out nobody could see while playing.
 
 Students pick out individual categories (e.g. `Industry_Travel`), **not**
 the parent field (`Industry`) toggling every category on at once. This
-applies to every one-hot-encoded field. Naming convention:
-`<OriginalHeader>_<DiscreteValue>` (e.g. `Pitchers Gender_Female`).
+applies to every one-hot-encoded field (currently just `Industry` — see
+"Pitchers Gender is continuous, not one-hot" below for the one field that
+deliberately isn't encoded this way). Naming convention:
+`<OriginalHeader>_<DiscreteValue>` (e.g. `Industry_Travel`).
 
 Consequence: `dataset.USABLE_COLUMNS` is a flat list where every one-hot
 category is its own first-class, individually selectable entry — there's no
@@ -71,9 +73,14 @@ their three scored attempts for a model that was never a real answer. So
 `sessions.Session.finalize()` now calls `dataset.fully_selected_categories()`
 *before* attempting any fit and, if it's non-empty, rejects the submission
 outright: `status: "invalid_selection"`, no attempt consumed, a short
-message from `dataset.dummy_variable_trap_message()`. See "Rejected
-selections: the dummy-variable trap" below and API_PROTOCOL.md, "Attempts,"
-for the full contract.
+message from `dataset.one_hot_collinearity_message()`. That message
+deliberately avoids the term "dummy variable" — to a student reading it
+mid-game, "dummy" reads as "this doesn't matter," which is backwards: every
+one-hot column still has a real, meaningful coefficient on its own, it's
+only selecting *all* of them at once that breaks the fit. "One-hot
+encoding" says the same thing without that risk. See "Significant design
+decision: rejected selections, not just deprecated exploring" below and
+API_PROTOCOL.md, "Attempts," for the full contract.
 
 `modeling.fit_logit_model()` itself is untouched and still allows the
 full-category case when called directly, outside a game session (see
@@ -97,12 +104,55 @@ converge to *different* numbers on identical data, standard errors come
 back `NaN`, condition number ~10¹⁵. See `API_PROTOCOL.md`, "Degenerate
 fits," for the full writeup and an example payload.
 
+## Significant design decision: Pitchers Gender is continuous, not one-hot
+
+`Pitchers Gender` is the one field in `CATEGORY_VALUES`'s original spot
+that got pulled back out and is no longer one-hot encoded. It's now a
+single numeric column in `NUMERIC_USABLE_COLUMNS`, encoded via
+`dataset.PITCHERS_GENDER_VALUES`: `Male -> 0.0`, `Mixed Team -> 0.5`,
+`Female -> 1.0`. A student picks one variable, `"Pitchers Gender"` —
+`Pitchers Gender_Male` / `_Female` / `_Mixed Team` no longer exist as
+columns at all.
+
+**Why this one field, when `Industry` stays one-hot.** One-hot encoding is
+the right choice for genuinely unordered categories — there's no
+meaningful sense in which `Industry_Travel` is "between" `Industry_Health
+/Wellness` and `Industry_Automotive`, so a single numeric code for
+"industry" would impose a false ordering the data doesn't have. Gender, as
+recorded in this dataset (`Male` / `Female` / `Mixed Team`), is different:
+a mixed team is genuinely a blend of the other two, not an unrelated third
+category off to the side — 0.5 sitting exactly halfway between 0 (Male)
+and 1 (Female) reflects that literally, not just conveniently. Treating it
+as a single continuous range is a real, defensible modeling choice here,
+not a shortcut.
+
+**Consequences worth knowing:**
+- `USABLE_COLUMNS` dropped from 34 to 32 entries (`NUMERIC_USABLE_COLUMNS`
+  gained one, `CATEGORY_VALUES` lost three) — `client/app.py`'s
+  `USABLE_COLUMN_COUNT` constant is updated to match; recompute it the
+  same way if the dataset changes again (see the comment above it).
+- `dataset.fully_selected_categories()` / the one-hot-collinearity
+  rejection in `Session.finalize()` (see below) no longer has anything to
+  do with gender — `CATEGORY_VALUES` only has `Industry` in it now, so
+  that entire mechanism is scoped to `Industry` alone. There's no
+  equivalent "select every gender value" failure mode any more, because
+  there's only one gender column to select.
+- The raw CSV has a handful of missing `Pitchers Gender` values (verified:
+  9 rows, out of ~1,480). `_build_prepared_frame()` maps those to `NaN`
+  same as any other missing numeric predictor -- `fit_logit_model()`
+  mean-imputes them from the training split, exactly like a missing
+  `Valuation Requested` would be. This is different from how a *missing*
+  one-hot category used to behave (all dummies simply 0), which is an
+  intentional side effect of no longer being one-hot, not an oversight.
+- The raw CSV itself is still never touched — this is a decode-time choice
+  in `dataset.py`, same as one-hot encoding is.
+
 ## Significant design decision: rejected selections, not just deprecated exploring
 
 `sessions.Session.finalize()` has three outcomes now, not two: `"ok"`,
 `"attempts_exhausted"`, and `"invalid_selection"` — a student selected
-every category of one or more one-hot fields at once (the dummy-variable
-trap; see the section above). Exhaustion is still checked first (same as
+every category of one or more one-hot fields at once (see the one-hot
+section above). Exhaustion is still checked first (same as
 before, and for the same reason: an already-exhausted student's input is
 never even looked at, since it wouldn't be used anyway); an
 `invalid_selection` is then caught right after, before any fit is
@@ -157,6 +207,38 @@ the 3rd attempt's data unchanged, never a new fit). See API_PROTOCOL.md,
 "Attempts," for the full endpoint contract; don't skip the polling pattern
 when touching client code, it's the entire reason `/attempts` exists.
 
+**Polling alone doesn't cover the POST itself getting lost, only its
+response.** The pattern above assumes `/finalize` was received and only
+the reply back to the browser went missing — polling then finds the
+already-recorded attempt. If the POST never reached the server at all
+(the more common failure on flaky classroom wifi), nothing ever shows up,
+and a student would be stuck staring at "Submitted — confirming…"
+forever. Both shipped clients now resend the same `POST /finalize` after
+**3 consecutive polls** (~3 seconds) show no change, and keep doing so
+until something does. This is deliberately just a resend of the identical
+request, not a different code path — `Session.finalize()` has no
+idempotency key, so a resend that finds the *original* POST actually did
+land (just slower than 3 polls, not truly lost) creates a genuine second
+attempt with the same variables.
+
+**That rare duplicate is then actively cleaned up, not just accepted.**
+`Session.collapse_duplicate_attempt()` removes a student's most recent
+attempt if it has *identical* variables to the one right before it,
+submitted within `sessions.DUPLICATE_COLLAPSE_WINDOW_SECONDS` (30s) — and
+is a no-op otherwise. Both clients call this automatically, right after a
+resend-triggered poll resolves, and it's deliberately **not** wired to any
+button in either UI. That's not an oversight: a *general* "withdraw my
+last attempt" tool, even one with no client button, is still reachable by
+any student who calls the API directly (their own token is a legitimate
+credential regardless of which button — if any — got it used), and would
+let them cycle finalize → look at the result → withdraw → finalize again
+for effectively unlimited real attempts, defeating the entire point of
+`MAX_ATTEMPTS`. Collapsing an *exact* duplicate doesn't have that hole:
+since the two attempts score identically (same variables, same cached
+fit), removing one is a strict no-op for the student's standing — there's
+no way to use it to discard a bad attempt and get a free do-over. See
+API_PROTOCOL.md, "Attempts," for the endpoint contract.
+
 **"Current standing" is always the best attempt, not the latest.** A
 student's position on the professor's dashboard and on both final
 leaderboards (`Session.dashboard()`, `Session.close()`) is their
@@ -175,9 +257,10 @@ would actually have scored best on the data nobody could see while playing.
   `USABLE_COLUMNS`, and one-hot encoding. Owns the derived/prepared CSV file
   (raw CSV is never touched — see below). Exposes `load_prepared_dataset()`
   as the one entry point everything else should use. Also owns
-  `fully_selected_categories()` (detects the dummy-variable trap) and
-  `dummy_variable_trap_message()` (the short, student-facing rejection
-  text) — both pure, column-name-only functions, no fitting involved.
+  `fully_selected_categories()` (detects a fully-selected one-hot field)
+  and `one_hot_collinearity_message()` (the short, student-facing
+  rejection text) — both pure, column-name-only functions, no fitting
+  involved.
 - `modeling.py` — pure functions: fit a logit model on seasons 1-7, score
   any fitted model's coefficients against any slice of data. No knowledge of
   sessions, caching, or HTTP. **This is the module to import directly if you
@@ -189,10 +272,11 @@ would actually have scored best on the data nobody could see while playing.
 - `sessions.py` — in-memory game state: join codes, students, the 3-attempt
   submission semantics (`MAX_ATTEMPTS`, `Session.finalize()`,
   `Session.attempts_for()`, `Session.best_attempt_for()`), rejected
-  (dummy-variable-trap) selections (`InvalidSelection`,
-  `Session.invalid_selection_for()`), the professor's dashboard snapshot,
-  and closing a session (the only place `modeling.score_final_test` gets
-  called, for every attempt).
+  (full-category, one-hot collinearity) selections (`InvalidSelection`,
+  `Session.invalid_selection_for()`), collapsing an accidental duplicate
+  attempt from a client's retry logic (`Session.collapse_duplicate_attempt()`),
+  the professor's dashboard snapshot, and closing a session (the only place
+  `modeling.score_final_test` gets called, for every attempt).
 - `schemas.py` / `server.py` — the FastAPI HTTP layer. Should stay thin; if
   you're writing real logic here instead of in the modules above, it
   probably belongs in one of them instead.
@@ -207,7 +291,7 @@ from economicsproject.modeling import fit_logit_model
 
 dataset = load_prepared_dataset()
 fitted = fit_logit_model(
-    ["Original Ask Amount", "Industry_Food and Beverage", "Pitchers Gender_Female"],
+    ["Original Ask Amount", "Industry_Food and Beverage", "Pitchers Gender"],
     dataset,
 )
 print(fitted.equation)
@@ -227,7 +311,15 @@ dashboard → stop flow through FastAPI's `TestClient`, which is the fastest
 way to sanity-check a change to the API layer end to end. It also covers a
 rejected full-category selection: `status: "invalid_selection"`, zero
 attempts consumed, and the same rejection showing up in `GET /status`'s
-`last_invalid_selection`.
+`last_invalid_selection`. `tests/test_sessions.py` covers
+`collapse_duplicate_attempt()`'s eligibility rules directly (identical
+variables within the time window vs. every way it should be a no-op:
+different variables, too far apart, fewer than 2 attempts, session
+closed). The full client-side retry-creates-a-duplicate-then-it-gets-
+collapsed round trip was verified with a real Playwright run against
+actually running servers, not just these unit tests -- an out-of-band
+request was used to simulate the specific race (client sees the original
+POST fail fast, but its bytes still reach the server well after 3 polls).
 
 ## Known simplifications
 

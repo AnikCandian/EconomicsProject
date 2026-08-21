@@ -46,12 +46,24 @@ NUMERIC_USABLE_COLUMNS = [
     "Kevin O Leary Present",
     "Guest Present",
     "Season Number",
+    "Pitchers Gender",
 ]
 
+# Pitchers Gender is encoded as a single continuous column, not one-hot --
+# Male=0.0, Mixed Team=0.5, Female=1.0. Unlike Industry, this genuinely is
+# an ordered range rather than a set of unrelated categories (mixed teams
+# sit *between* male and female, not off to the side of both), so a real
+# number is a more honest encoding than three unordered dummy columns --
+# see CLAUDE.md for the full reasoning. These are the only three values
+# that appear in the raw CSV for this field (verified).
+PITCHERS_GENDER_VALUES: dict[str, float] = {"Male": 0.0, "Mixed Team": 0.5, "Female": 1.0}
+
 # Category columns and their full, fixed vocabulary (verified against the
-# raw CSV). Each value becomes its own individually-selectable dummy column
-# -- students pick out specific categories (e.g. "Industry_Travel"), not the
-# whole field toggled on at once. Naming convention: "<Header>_<Value>".
+# raw CSV). Each value becomes its own individually-selectable one-hot
+# column -- students pick out specific categories (e.g. "Industry_Travel"),
+# not the whole field toggled on at once. Naming convention:
+# "<Header>_<Value>". Pitchers Gender is deliberately NOT in here -- see
+# PITCHERS_GENDER_VALUES above.
 CATEGORY_VALUES: dict[str, list[str]] = {
     "Industry": [
         "Food and Beverage",
@@ -71,7 +83,6 @@ CATEGORY_VALUES: dict[str, list[str]] = {
         "Liquor/Alcohol",
         "Travel",
     ],
-    "Pitchers Gender": ["Male", "Female", "Mixed Team"],
 }
 
 
@@ -103,11 +114,11 @@ def validate_variable_selection(variables: list[str]) -> None:
     """Raise ValueError if any name in ``variables`` isn't a real, usable column.
 
     This only checks column names -- it does not, by itself, reject
-    selecting every category of one field at once (the "dummy variable
-    trap"; see ``fully_selected_categories``). In the actual student game
-    that specific case is rejected by ``sessions.Session.finalize()``
-    before any fit is attempted (a dedicated ``"invalid_selection"``
-    status, not a plain ValueError -- see API_PROTOCOL.md, "Attempts").
+    selecting every one-hot category of one field at once (see
+    ``fully_selected_categories``). In the actual student game that
+    specific case is rejected by ``sessions.Session.finalize()`` before any
+    fit is attempted (a dedicated ``"invalid_selection"`` status, not a
+    plain ValueError -- see API_PROTOCOL.md, "Attempts").
     ``modeling.fit_logit_model()`` used directly, outside a game session
     (see CLAUDE.md, "Running a model standalone"), still allows it and
     reports a degenerate-fit warning instead -- seeing *why* the fit breaks
@@ -120,8 +131,9 @@ def validate_variable_selection(variables: list[str]) -> None:
 
 
 def fully_selected_categories(variables: list[str]) -> list[str]:
-    """Which category fields (if any) have every one of their values present
-    in ``variables`` -- the classic one-hot dummy-variable trap."""
+    """Which category fields (if any) have every one of their one-hot values
+    present in ``variables`` at once -- exactly collinear with the
+    intercept (see modeling.describe_collinearity)."""
     chosen = set(variables)
     return [
         category
@@ -130,20 +142,25 @@ def fully_selected_categories(variables: list[str]) -> list[str]:
     ]
 
 
-def dummy_variable_trap_message(culprit_categories: list[str]) -> str:
+def one_hot_collinearity_message(culprit_categories: list[str]) -> str:
     """Short, student-facing explanation for rejecting a finalize() attempt
-    that selects every category of one or more one-hot fields at once --
-    the "dummy variable trap" (those dummies sum to 1 for every row,
-    exactly duplicating the intercept; see modeling.describe_collinearity
-    for the full numerical explanation, which this deliberately doesn't
-    repeat). Kept short: nobody but the professor needs the underlying
-    math, just that the choice isn't allowed and how to fix it.
+    that selects every one-hot category of one or more fields at once (see
+    modeling.describe_collinearity for the full numerical explanation,
+    which this deliberately doesn't repeat). Kept short: nobody but the
+    professor needs the underlying math, just that the choice isn't
+    allowed and how to fix it.
+
+    Deliberately doesn't say "dummy variable" -- to a student that reads as
+    "these don't matter," the opposite of what's true here; every one-hot
+    column still has a real, meaningful coefficient, the problem is only
+    that picking *all* of them at once makes that coefficient impossible to
+    pin down uniquely.
     """
     named = " and ".join(culprit_categories)
     return (
-        f"Can't build a model with every {named} option selected — that's "
-        "the dummy variable trap (perfect multicollinearity from one-hot "
-        f"encoding). Deselect at least one {named} option and try again."
+        f"Can't build a model with every {named} option selected — selecting "
+        "every one-hot encoded option for a category creates perfect "
+        f"multicollinearity. Deselect at least one {named} option and try again."
     )
 
 
@@ -187,6 +204,12 @@ def _build_prepared_frame(raw_csv_path: Path) -> pd.DataFrame:
     raw = pd.read_csv(raw_csv_path)
     df = raw[NUMERIC_USABLE_COLUMNS + list(CATEGORY_VALUES) + [TARGET_COLUMN]].copy()
     df = df.dropna(subset=[TARGET_COLUMN])
+    # Male/Mixed Team/Female -> 0.0/0.5/1.0, not one-hot -- see
+    # PITCHERS_GENDER_VALUES. Any value outside that mapping (there
+    # shouldn't be any -- verified against the raw CSV) becomes NaN here,
+    # same as a missing numeric predictor elsewhere: fit_logit_model()
+    # mean-imputes it from the training split, it isn't a hard error.
+    df["Pitchers Gender"] = df["Pitchers Gender"].map(PITCHERS_GENDER_VALUES)
     return one_hot_encode_categories(df, CATEGORY_VALUES)
 
 

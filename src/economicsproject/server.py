@@ -230,8 +230,8 @@ def finalize(code: str, body: schemas.FinalizeRequest, x_student_token: str = He
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
     if finalize_status == "invalid_selection":
-        # Every category of a one-hot field was selected at once (the
-        # dummy-variable trap) -- rejected before any fit, no attempt spent.
+        # Every category of a one-hot field was selected at once
+        # (perfectly collinear) -- rejected before any fit, no attempt spent.
         attempts_used = len(session.attempts_for(x_student_token))
         return {
             "status": "invalid_selection",
@@ -267,6 +267,39 @@ def attempts(code: str, x_student_token: str = Header(...)):
         "attempts_used": len(submissions),
         "attempts_remaining": max(0, MAX_ATTEMPTS - len(submissions)),
         "max_attempts": MAX_ATTEMPTS,
+    }
+
+
+@app.post("/sessions/{code}/attempts/collapse-duplicate")
+def collapse_duplicate_attempt(code: str, x_student_token: str = Header(...)):
+    """Not exposed by either shipped client's UI -- a client's own
+    retry-after-3-stalled-polls logic calls this automatically after
+    noticing more attempts landed than it expected (see API_PROTOCOL.md,
+    "Attempts"). A strict no-op unless this student's two most recent
+    attempts have identical variables and were submitted close together in
+    time -- see Session.collapse_duplicate_attempt(). Always 200, never
+    404/409 for "nothing to collapse" -- that's the expected common case,
+    not an error."""
+    session = _store.get(code)
+    session.student_for_token(x_student_token)  # raises UnknownStudentError -> 401 if invalid
+    kept, collapse_status = session.collapse_duplicate_attempt(x_student_token)
+
+    if collapse_status == "not_eligible":
+        attempts_used = len(session.attempts_for(x_student_token))
+        return {
+            "status": "not_eligible",
+            "attempts_used": attempts_used,
+            "attempts_remaining": max(0, MAX_ATTEMPTS - attempts_used),
+            "max_attempts": MAX_ATTEMPTS,
+        }
+
+    attempts_used = kept.attempt_number
+    return {
+        "status": "withdrawn",
+        "attempts_used": attempts_used,
+        "attempts_remaining": max(0, MAX_ATTEMPTS - attempts_used),
+        "max_attempts": MAX_ATTEMPTS,
+        **_submission_dict(kept),
     }
 
 

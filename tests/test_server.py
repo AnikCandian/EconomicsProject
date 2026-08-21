@@ -193,3 +193,41 @@ def test_unknown_student_token_is_401():
         headers={"X-Student-Token": "not-a-real-token"},
     )
     assert response.status_code == 401
+
+
+def test_collapse_duplicate_attempt_withdraws_an_identical_recent_repeat():
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
+
+    client.post(f"/sessions/{code}/finalize", json={"variables": ["Industry_Travel"]}, headers=headers)
+    client.post(f"/sessions/{code}/finalize", json={"variables": ["Industry_Travel"]}, headers=headers)
+
+    response = client.post(f"/sessions/{code}/attempts/collapse-duplicate", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "withdrawn"
+    assert body["attempts_used"] == 1
+    assert body["attempts_remaining"] == 2
+
+    attempts = client.get(f"/sessions/{code}/attempts", headers=headers).json()
+    assert attempts["attempts_used"] == 1
+
+
+def test_collapse_duplicate_attempt_is_a_noop_when_nothing_to_collapse():
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    headers = {"X-Student-Token": student["student_token"]}
+
+    client.post(f"/sessions/{code}/finalize", json={"variables": ["Industry_Travel"]}, headers=headers)
+
+    response = client.post(f"/sessions/{code}/attempts/collapse-duplicate", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_eligible"
+    assert body["attempts_used"] == 1  # untouched
+
+    attempts = client.get(f"/sessions/{code}/attempts", headers=headers).json()
+    assert attempts["attempts_used"] == 1

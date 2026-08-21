@@ -26,10 +26,11 @@ function fmtPct(value) {
 
 // Client-side mirror of dataset.fully_selected_categories() -- which
 // one-hot fields (if any) have every one of their categories checked at
-// once, the classic dummy-variable trap. Checked before ever POSTing to
-// /finalize so a student can't submit it in the first place; the server
-// enforces the same rule independently (see API_PROTOCOL.md, "Attempts")
-// in case this check is ever bypassed or `categories` is stale.
+// once, which is perfectly collinear with the intercept. Checked before
+// ever POSTing to /finalize so a student can't submit it in the first
+// place; the server enforces the same rule independently (see
+// API_PROTOCOL.md, "Attempts") in case this check is ever bypassed or
+// `categories` is stale.
 function fullySelectedCategories(variables, categories) {
   const chosen = new Set(variables);
   return Object.entries(categories)
@@ -37,14 +38,18 @@ function fullySelectedCategories(variables, categories) {
     .map(([category]) => category);
 }
 
-// Mirrors dataset.dummy_variable_trap_message() server-side, so the banner
-// reads the same whether the client caught this before submitting or the
-// server caught it (e.g. after a lost /finalize response, confirmed via
-// GET /status's last_invalid_selection).
-function dummyVariableTrapMessage(culpritCategories) {
+// Mirrors dataset.one_hot_collinearity_message() server-side, so the
+// banner reads the same whether the client caught this before submitting
+// or the server caught it (e.g. after a lost /finalize response, confirmed
+// via GET /status's last_invalid_selection). Deliberately doesn't say
+// "dummy variable" -- to a student that reads as "these don't matter,"
+// which is backwards; every one-hot column still has a real coefficient,
+// it's only picking *all* of them at once that breaks the fit.
+function oneHotCollinearityMessage(culpritCategories) {
   const named = culpritCategories.join(" and ");
   return (
-    `Can't build a model with every ${named} option selected — that's the dummy variable trap ` +
-    `(perfect multicollinearity from one-hot encoding). Deselect at least one ${named} option and try again.`
+    `Can't build a model with every ${named} option selected — selecting every one-hot ` +
+    `encoded option for a category creates perfect multicollinearity. Deselect at least ` +
+    `one ${named} option and try again.`
   );
 }
