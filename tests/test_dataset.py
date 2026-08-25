@@ -6,8 +6,11 @@ from economicsproject.dataset import (
     PITCHERS_GENDER_VALUES,
     PREPARED_DATA_PATH,
     USABLE_COLUMNS,
+    SeasonConfig,
+    default_season_config,
     fully_selected_categories,
     load_prepared_dataset,
+    validate_season_config,
     validate_variable_selection,
 )
 
@@ -52,14 +55,54 @@ def test_prepared_csv_is_written_to_disk():
     assert PREPARED_DATA_PATH.exists()
 
 
-def test_split_by_season_matches_train_basic_final_boundaries():
+def test_default_season_config_trains_and_basic_tests_on_the_same_seasons():
     dataset = load_prepared_dataset()
-    train, basic_test, final_test = dataset.split_by_season()
+    default = default_season_config(dataset.available_seasons)
+
+    # deliberate overlap -- see dataset.default_season_config's docstring
+    assert default.train_seasons == default.basic_test_seasons == frozenset(range(1, 11))
+    assert default.final_test_seasons == frozenset(range(11, 18))
+    # final test is whatever's left, never overlapping train by construction
+    assert not (default.final_test_seasons & default.train_seasons)
+
+
+def test_split_by_season_matches_a_custom_season_config():
+    dataset = load_prepared_dataset()
+    season_config = SeasonConfig(
+        train_seasons=frozenset(range(1, 8)),
+        basic_test_seasons=frozenset(range(8, 11)),
+        final_test_seasons=frozenset(range(11, 18)),
+    )
+    train, basic_test, final_test = dataset.split_by_season(season_config)
 
     assert set(train["Season Number"].unique()) <= set(range(1, 8))
     assert set(basic_test["Season Number"].unique()) <= set(range(8, 11))
-    assert set(final_test["Season Number"].unique()) == dataset.final_test_seasons
+    assert set(final_test["Season Number"].unique()) == season_config.final_test_seasons
     assert not (set(final_test["Season Number"].unique()) & set(range(1, 11)))
+
+
+def test_split_by_season_allows_train_and_basic_test_to_overlap():
+    dataset = load_prepared_dataset()
+    default = default_season_config(dataset.available_seasons)
+    train, basic_test, _ = dataset.split_by_season(default)
+
+    # the default deliberately tests on the training data itself
+    assert len(train) == len(basic_test)
+    assert set(train["Season Number"].unique()) == set(basic_test["Season Number"].unique())
+
+
+def test_validate_season_config_rejects_empty_or_unknown_seasons():
+    dataset = load_prepared_dataset()
+
+    with pytest.raises(ValueError, match="must include at least one season"):
+        validate_season_config(
+            SeasonConfig(frozenset(), frozenset({1}), frozenset({2})), dataset.available_seasons
+        )
+
+    with pytest.raises(ValueError, match="unknown season"):
+        validate_season_config(
+            SeasonConfig(frozenset({999}), frozenset({1}), frozenset({2})), dataset.available_seasons
+        )
 
 
 def test_validate_variable_selection_rejects_unusable_columns():

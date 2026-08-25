@@ -38,7 +38,7 @@
           </div>
           <div class="equation-text" id="equation-text">No attempts submitted yet.</div>
         </div>
-        <div class="equation-caption">Recall by actual outcome, seasons 8–10 (basic test) — no live preview; submit to see a result.</div>
+        <div class="equation-caption" id="equation-caption">Recall by actual outcome (basic test) — no live preview; submit to see a result.</div>
       </div>
       <div class="builder-summary__intro">
         <div class="eyebrow">Specification · logit link</div>
@@ -65,15 +65,15 @@
 
     <div class="builder-footer">
       <div class="builder-footer__label">Training data</div>
-      <div>Seasons 1–7 · fixed by the backend</div>
-      <div class="builder-footer__note">Seasons 8–10 score you on submission; seasons 11+ stay hidden until the professor stops the session</div>
+      <div id="footer-train-seasons">Seasons — · set by the professor</div>
+      <div class="builder-footer__note" id="footer-season-note"></div>
     </div>
   </div>
 
   <div class="builder-rail">
     <div class="builder-rail__inner">
       <p id="rail-invalid-selection" class="rail-invalid" hidden></p>
-      <div class="eyebrow">Basic-test accuracy · seasons 8–10</div>
+      <div class="eyebrow" id="rail-basic-test-eyebrow">Basic-test accuracy</div>
       <div class="rail-score">
         <div class="rail-score__num" id="rail-pct">—</div>
         <div class="rail-score__pct">%</div>

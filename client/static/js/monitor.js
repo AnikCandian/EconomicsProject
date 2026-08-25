@@ -21,6 +21,7 @@ let startedAtMs = Number(sessionStorage.getItem("dealGame.startedAtMs")) || null
 let endedAtMs = Number(sessionStorage.getItem("dealGame.endedAtMs")) || null;
 let dashboardHandle = null;
 let clockHandle = null;
+let defaultSeasonSplit = null; // {train, basicTest, finalTest} -- populated from GET /seasons
 
 function showDashboard() {
   document.getElementById("pre-session").hidden = true;
@@ -33,14 +34,22 @@ if (sessionCode && hostToken) {
   startPolling();
   startClock();
   if (endedAtMs) renderStoppedState();
+} else {
+  loadSeasonPicker();
 }
 
 document.getElementById("start-btn").addEventListener("click", async () => {
   document.getElementById("start-error").hidden = true;
+  const body = {
+    train_seasons: checkedSeasons("season-check--train"),
+    basic_test_seasons: checkedSeasons("season-check--basic"),
+    final_test_seasons: checkedSeasons("season-check--final"),
+  };
   try {
     const data = await apiRequest("/sessions", {
       method: "POST",
       headers: { "X-Professor-Key": professorKey },
+      body,
     });
     sessionCode = data.session_code;
     hostToken = data.host_token;
@@ -49,6 +58,7 @@ document.getElementById("start-btn").addEventListener("click", async () => {
     sessionStorage.setItem("dealGame.hostToken", hostToken);
     sessionStorage.setItem("dealGame.startedAtMs", String(startedAtMs));
 
+    renderSeasonInfo(data);
     showDashboard();
     startPolling();
     startClock();
@@ -58,6 +68,83 @@ document.getElementById("start-btn").addEventListener("click", async () => {
     el.hidden = false;
   }
 });
+
+// ---- season picker (pre-session only -- fixed once a session starts) ----
+
+async function loadSeasonPicker() {
+  try {
+    const data = await apiRequest("/seasons");
+    defaultSeasonSplit = {
+      train: data.default_train_seasons,
+      basicTest: data.default_basic_test_seasons,
+      finalTest: data.default_final_test_seasons,
+    };
+    buildSeasonTable(data.available_seasons, defaultSeasonSplit);
+  } catch (err) {
+    document.getElementById("season-table-body").innerHTML =
+      `<tr><td colspan="4" class="empty-note">Couldn't load seasons: ${err.message}</td></tr>`;
+  }
+}
+
+function buildSeasonTable(availableSeasons, split) {
+  const tbody = document.getElementById("season-table-body");
+  tbody.innerHTML = "";
+  availableSeasons.forEach((season) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>Season ${season}</td>
+      <td><input type="checkbox" class="season-check--train" value="${season}" ${split.train.includes(season) ? "checked" : ""}></td>
+      <td><input type="checkbox" class="season-check--basic" value="${season}" ${split.basicTest.includes(season) ? "checked" : ""}></td>
+      <td><input type="checkbox" class="season-check--final" value="${season}" ${split.finalTest.includes(season) ? "checked" : ""}></td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+document.getElementById("season-reset-btn").addEventListener("click", () => {
+  const seasons = Array.from(document.querySelectorAll("#season-table-body tr")).map((row) =>
+    Number(row.querySelector("td").textContent.replace("Season ", ""))
+  );
+  if (defaultSeasonSplit) buildSeasonTable(seasons, defaultSeasonSplit);
+});
+
+function checkedSeasons(className) {
+  return Array.from(document.querySelectorAll(`.${className}:checked`)).map((el) => Number(el.value));
+}
+
+// ---- season-info chips (dashboard, live + final) ----
+
+function formatSeasonRanges(seasons) {
+  if (!seasons || seasons.length === 0) return "none";
+  const sorted = [...seasons].sort((a, b) => a - b);
+  const ranges = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur === prev + 1) {
+      prev = cur;
+      continue;
+    }
+    ranges.push(start === prev ? `${start}` : `${start}–${prev}`);
+    if (i < sorted.length) {
+      start = prev = cur;
+    }
+  }
+  return ranges.join(", ");
+}
+
+function renderSeasonInfo(data) {
+  document.getElementById("season-info-chips").innerHTML = `
+    <span class="tag">Train · seasons ${formatSeasonRanges(data.train_seasons)}</span>
+    <span class="tag tag-accent">Basic test (live) · seasons ${formatSeasonRanges(data.basic_test_seasons)}</span>
+    <span class="tag">Final test (revealed at stop) · seasons ${formatSeasonRanges(data.final_test_seasons)}</span>
+  `;
+  document.getElementById("final-basic-heading").textContent =
+    `Leaderboard — seasons ${formatSeasonRanges(data.basic_test_seasons)} (basic test)`;
+  document.getElementById("final-final-heading").textContent =
+    `Leaderboard — seasons ${formatSeasonRanges(data.final_test_seasons)} (final test)`;
+}
 
 document.getElementById("stop-btn").addEventListener("click", async () => {
   if (!confirm("End this session? Students will no longer be able to explore or finalize.")) return;
@@ -128,6 +215,8 @@ async function pollDashboard() {
 }
 
 function renderDashboard(data) {
+  renderSeasonInfo(data);
+
   document.getElementById("session-note").textContent =
     data.students_total + " connected · " + data.students_finalized + " finalized";
 

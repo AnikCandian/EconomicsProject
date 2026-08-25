@@ -7,6 +7,23 @@
   <label>Professor key
     <input id="professor-key" type="password" autocomplete="off">
   </label>
+
+  <h3>Season data split</h3>
+  <p>
+    Check each season for Train, Basic test (scored live while students play), and/or Final test
+    (held out, only scored once you end the session). A season can be checked in more than one
+    column. This can't be changed once the session starts.
+  </p>
+  <div class="table-scroll">
+    <table id="season-table">
+      <thead>
+        <tr><th>Season</th><th>Train</th><th>Basic test</th><th>Final test</th></tr>
+      </thead>
+      <tbody><tr><td colspan="4">Loading seasons&hellip;</td></tr></tbody>
+    </table>
+  </div>
+  <button id="season-reset-btn" type="button">Reset to default</button>
+
   <button id="start-btn">Start session</button>
   <p id="start-error" class="error"></p>
 </section>
@@ -26,6 +43,9 @@
   <h3>Students online</h3>
   <ul id="students-online"></ul>
 
+  <h3>Season data split</h3>
+  <p id="session-season-info"></p>
+
   <h3>Leaderboard <small>(finalized submissions, basic test)</small></h3>
   <div class="table-scroll">
     <table id="leaderboard-table">
@@ -43,7 +63,7 @@
 <section id="results-section" hidden>
   <h2>Final results</h2>
 
-  <h3>Leaderboard — seasons 8-10 (basic test)</h3>
+  <h3 id="final-basic-heading">Leaderboard — basic test</h3>
   <div class="table-scroll">
     <table id="basic-results-table">
       <thead>
@@ -53,7 +73,7 @@
     </table>
   </div>
 
-  <h3>Leaderboard — seasons 11+ (final test)</h3>
+  <h3 id="final-final-heading">Leaderboard — final test</h3>
   <div class="table-scroll">
     <table id="final-results-table">
       <thead>

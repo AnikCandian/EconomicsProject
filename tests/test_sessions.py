@@ -1,6 +1,5 @@
 import pytest
 
-from economicsproject.cache import ModelCache
 from economicsproject.dataset import load_prepared_dataset
 from economicsproject.sessions import (
     DUPLICATE_COLLAPSE_WINDOW_SECONDS,
@@ -14,7 +13,7 @@ from economicsproject.sessions import (
 @pytest.fixture
 def store():
     dataset = load_prepared_dataset()
-    return SessionStore(ModelCache(dataset), dataset)
+    return SessionStore(dataset)
 
 
 def test_join_finalize_happy_path(store):
@@ -259,3 +258,58 @@ def test_collapse_duplicate_attempt_is_a_noop_after_close(store):
 
     assert (kept, status) == (None, "not_eligible")
     assert len(session.attempts_for(student.token)) == 2  # untouched
+
+
+def test_create_uses_the_default_season_config_when_none_given(store):
+    from economicsproject.dataset import default_season_config, load_prepared_dataset
+
+    session = store.create()
+    expected = default_season_config(load_prepared_dataset().available_seasons)
+
+    assert session.season_config == expected
+    # the default deliberately tests on the training data itself
+    assert session.season_config.train_seasons == session.season_config.basic_test_seasons
+
+
+def test_create_accepts_a_custom_season_config(store):
+    from economicsproject.dataset import SeasonConfig
+
+    custom = SeasonConfig(
+        train_seasons=frozenset(range(1, 8)),
+        basic_test_seasons=frozenset(range(8, 11)),
+        final_test_seasons=frozenset(range(11, 18)),
+    )
+    session = store.create(custom)
+
+    assert session.season_config == custom
+
+
+def test_create_rejects_an_invalid_season_config(store):
+    from economicsproject.dataset import SeasonConfig
+
+    with pytest.raises(ValueError, match="unknown season"):
+        store.create(SeasonConfig(frozenset({999}), frozenset({1}), frozenset({2})))
+    with pytest.raises(ValueError, match="must include at least one season"):
+        store.create(SeasonConfig(frozenset(), frozenset({1}), frozenset({2})))
+
+
+def test_two_sessions_with_different_season_configs_score_the_same_variables_differently(store):
+    from economicsproject.dataset import SeasonConfig
+
+    default_session = store.create()
+    custom_session = store.create(
+        SeasonConfig(
+            train_seasons=frozenset(range(1, 8)),
+            basic_test_seasons=frozenset(range(8, 11)),
+            final_test_seasons=frozenset(range(11, 18)),
+        )
+    )
+
+    a = default_session.join("Ada Lovelace")
+    b = custom_session.join("Grace Hopper")
+    sub_a, _ = default_session.finalize(a.token, ["Original Ask Amount"])
+    sub_b, _ = custom_session.finalize(b.token, ["Original Ask Amount"])
+
+    # default trains and basic-tests on the same (larger) season set;
+    # the custom config's basic test is a genuinely smaller, disjoint slice
+    assert sub_a.basic_test.sample_size != sub_b.basic_test.sample_size

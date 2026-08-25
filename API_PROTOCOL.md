@@ -83,13 +83,14 @@ Season Number, Pitchers Gender
 ```
 
 `Guest Present` is deliberately **not** in this list, even though the raw
-CSV has a same-named column -- it only starts being recorded in season 15
-(part of the final hold-out, seasons 11+), so it has zero non-null values
-in both the training seasons (1-7) and the basic-test seasons (8-10). A
-model can't be trained or basic-tested against a column that's entirely
-missing in both of those ranges, so it's excluded from `USABLE_COLUMNS`
-outright rather than offered and left to fail -- see `CLAUDE.md` for the
-exact failure this used to produce.
+CSV has a same-named column -- it only starts being recorded in season 15,
+so it had zero non-null values in both the training and basic-test seasons
+under the fixed split this project used before season configuration became
+professor-adjustable (seasons 1-7 and 8-10 respectively -- see `CLAUDE.md`,
+"Fixed bugs," for the exact failure this used to produce). It's excluded
+from `USABLE_COLUMNS` unconditionally, regardless of which seasons a
+professor now picks for a given session, rather than offered and left to
+fail on whichever splits happen to exclude season 15 or later.
 
 `Pitchers Gender` is genuinely numeric here, not a categorical field
 squeezed into a number: `Male` is `0.0`, `Mixed Team` is `0.5`, `Female` is
@@ -135,17 +136,43 @@ variable picker without hardcoding any of this:
 
 ## Data split & scoring
 
-Every model is trained only on **seasons 1–7**. Two disjoint slices are used
-for scoring, and only one of them is ever shown to students while a session
+Every model is trained on **train_seasons**, and scored against two other
+season sets — only one of which is ever shown to students while a session
 is running:
 
-- **Basic test — seasons 8–10.** Scored immediately on every `explore` and
-  `finalize` call. This is what students see and optimize against live.
-- **Final test — seasons 11 and up** (currently 11–17 in the bundled CSV;
-  it's "whatever seasons exist beyond 10," not hardcoded to a specific upper
-  bound). Never scored until the professor calls `POST /stop`. This is a
-  genuine hold-out — nothing in `/explore` or `/finalize` responses reveals
-  final-test performance, so students can't back it out mid-game.
+- **Basic test.** Scored immediately on every `explore` and `finalize` call.
+  This is what students see and optimize against live.
+- **Final test.** Never scored until the professor calls `POST /stop`. This
+  is a genuine hold-out — nothing in `/explore` or `/finalize` responses
+  reveals final-test performance, so students can't back it out mid-game.
+
+**Which seasons land in which of those three sets is professor-configurable,
+per session, before the session starts — see "Season configuration"
+immediately below.** `GET /seasons` lists every season the dataset has and
+the out-of-the-box split; `POST /sessions` accepts an optional body to
+override it. Once a session exists, its split is fixed for that session's
+whole lifetime — there's no endpoint to change it after the fact, matching
+`host_token` and every other per-session value.
+
+**The out-of-the-box split, if the professor doesn't override anything:**
+train on seasons 1–10, basic-test on the *same* seasons 1–10, final-test on
+whatever's left (currently 11–17 in the bundled CSV). Training and
+basic-testing on the identical seasons is deliberate, not a bug — it's
+almost pushing for an overfit on purpose, so the "live" number students
+chase while playing is optimistic by construction, and genuine
+out-of-sample performance only shows up once the professor stops the
+session and the final test (seasons nobody could see while playing) gets
+scored for the first time.
+
+**Overlap is allowed, and not just in the default.** `train_seasons`,
+`basic_test_seasons`, and `final_test_seasons` are three independent season
+sets — the only requirements are that each is non-empty and every season
+number in it actually exists in the dataset (`GET /seasons`' `available_seasons`).
+Nothing stops a professor from, say, training and basic-testing on
+overlapping-but-not-identical seasons, or even letting `final_test_seasons`
+overlap `train_seasons` — that's a legitimate (if pedagogically unusual)
+choice the API doesn't second-guess. The only case rejected outright is an
+empty set or an unknown season number (`400`).
 
 Each score is a `ConfusionMetrics` object:
 
@@ -168,6 +195,50 @@ Each score is a `ConfusionMetrics` object:
   decent accuracy while being useless. `null` for `yes_deal_accuracy` /
   `no_deal_accuracy` only if a slice has zero examples of that outcome
   (won't happen with this dataset, but the API stays honest about it).
+
+## Season configuration
+
+`GET /seasons` (public, no auth — same sensitivity as `USABLE_COLUMNS`) lists
+every season number the dataset actually has, plus the out-of-the-box split,
+so a professor's client can render a season picker *before* a session
+exists (there's no session yet at that point to carry this info):
+
+```json
+{
+  "available_seasons": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+  "default_train_seasons": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "default_basic_test_seasons": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "default_final_test_seasons": [11, 12, 13, 14, 15, 16, 17]
+}
+```
+
+`POST /sessions` (see "Endpoints" below) then accepts an optional body with
+any of `train_seasons` / `basic_test_seasons` / `final_test_seasons` — each a
+list of season numbers, independent of the other two. Any field left out (or
+the whole body left out) falls back to that field's default above. The
+resolved config is echoed back in the `201` response and again from
+`POST /sessions/{code}/join` and `GET /sessions/{code}/dashboard`, so
+neither client has to remember what it originally requested.
+
+Both shipped clients render this as **one table, one row per season, three
+independent checkboxes per row** (Train / Basic test / Final test columns) —
+not three separate dropdowns — since a season can belong to any combination
+of the three sets (see "Data split & scoring" above for why overlap is
+allowed and even the default relies on it). This is a deliberate UI choice,
+not just what happened to be easiest: a professor picking cutoff ranges
+alone couldn't express the default split itself, which trains and
+basic-tests on the *identical* seasons.
+
+**Fixed once a session starts.** There is no endpoint to change a session's
+season config after `POST /sessions` returns — same as `host_token`, it's
+part of what makes a session that session for its whole lifetime. This also
+means the split is baked into that session's model cache: two sessions
+with different season configs never share a fitted model for the same
+variable set, since the same variables genuinely mean a different fit
+depending on what they were trained on (see "Model caching" below).
+
+**Errors:** `400` if any of the three season lists is empty, or names a
+season number `GET /seasons`' `available_seasons` doesn't have.
 
 ## Attempts
 
@@ -360,12 +431,20 @@ degenerate case above.
 The backend fits a logit model for a given *set* of variables (order and
 duplicates don't matter — `["Industry_Travel", "Original Ask Amount"]` and
 `["Original Ask Amount", "Industry_Travel", "Industry_Travel"]` are the same model) **at
-most once per server process**, the first time any student asks for it. Every
-later `explore`/`finalize` call with that same variable set — from the same
-student or a different one — reuses the cached fit instantly instead of
-re-running the regression. The cache is shared across all sessions on the
-server, not per-session, since the fit is a pure function of the training
-data and the variable set.
+most once per session**, the first time any student in that session asks for
+it. Every later `explore`/`finalize` call with that same variable set — from
+the same student or a different one, within that session — reuses the
+cached fit instantly instead of re-running the regression.
+
+**The cache is per-session, not shared across the whole server.** Since a
+session's season config (see "Season configuration" above) is now
+professor-configurable, the same variable set can mean a genuinely
+different fit in two different sessions — a model trained on seasons 1–10
+isn't the same fit as one trained on seasons 1–7, even for identical
+variables. Each `Session` gets its own `ModelCache`, built at
+`POST /sessions` time against that session's resolved season config, so two
+concurrent sessions never accidentally hand each other's students a fit
+that was trained on the wrong seasons.
 
 **Fits for the same variable set are serialized, not run in parallel.**
 `ModelCache.get_or_fit()` used to fit outside any per-key lock on a cache
@@ -414,23 +493,53 @@ here.
 
 ## Endpoints
 
+### `GET /seasons`
+
+Every season number the dataset has, plus the out-of-the-box split. Public,
+no auth. Called before `POST /sessions` exists to render a season picker —
+see "Season configuration" above for the full contract and response shape.
+
+---
+
 ### `POST /sessions`
 
 Start a new session ("server"). Professor-only.
 
 **Headers:** `X-Professor-Key: <secret>`
 
-**Request body:** none
+**Request body** (all fields optional; the whole body may be omitted):
+```json
+{
+  "train_seasons": [1, 2, 3, 4, 5, 6, 7],
+  "basic_test_seasons": [8, 9, 10],
+  "final_test_seasons": [11, 12, 13, 14, 15, 16, 17]
+}
+```
+
+A field left out falls back to that field's default from `GET /seasons`
+(see "Season configuration" above). Fixed for the session's whole
+lifetime — there's no endpoint to change these once a session exists.
 
 **Response** `201`:
 ```json
-{ "session_code": "701163", "host_token": "vhin3wkXSlwFz4o8jt-cja03dRy_mgPL" }
+{
+  "session_code": "701163",
+  "host_token": "vhin3wkXSlwFz4o8jt-cja03dRy_mgPL",
+  "train_seasons": [1, 2, 3, 4, 5, 6, 7],
+  "basic_test_seasons": [8, 9, 10],
+  "final_test_seasons": [11, 12, 13, 14, 15, 16, 17]
+}
 ```
 
 `session_code` is the 6-digit code to display/share with students (like a
 Kahoot PIN). `host_token` is secret — keep it on the professor's client only;
 it's what proves ownership of this specific session for the dashboard/stop
-calls below.
+calls below. The three season lists are the *resolved* config (defaults
+already applied), echoed back so the client doesn't have to remember what
+it originally requested.
+
+**Errors:** `401` bad/missing professor key; `400` an empty season list, or
+a season number not in `GET /seasons`' `available_seasons`.
 
 ---
 
@@ -459,13 +568,19 @@ A student joins a session with their name.
     "Industry_Travel": "Industry",
     "...": "..."
   },
-  "max_attempts": 3
+  "max_attempts": 3,
+  "train_seasons": [1, 2, 3, 4, 5, 6, 7],
+  "basic_test_seasons": [8, 9, 10],
+  "final_test_seasons": [11, 12, 13, 14, 15, 16, 17]
 }
 ```
 
 `student_token` identifies this student for every subsequent call — store it
 client-side (e.g. `sessionStorage`) and send it as `X-Student-Token`.
-`max_attempts` is echoed here so a frontend doesn't need to hardcode it.
+`max_attempts` is echoed here so a frontend doesn't need to hardcode it. The
+three season lists are this session's fixed config (see "Season
+configuration" above) — a frontend uses these to label "basic test" /
+"final test" instead of hardcoding season numbers.
 
 **Errors:** `404` unknown `code`; `400` empty `full_name`.
 
@@ -719,7 +834,10 @@ The professor's live view. Poll every 5 seconds (see "Real-time updates").
       "warning": null,
       "finalized_at": 1787121482.58
     }
-  ]
+  ],
+  "train_seasons": [1, 2, 3, 4, 5, 6, 7],
+  "basic_test_seasons": [8, 9, 10],
+  "final_test_seasons": [11, 12, 13, 14, 15, 16, 17]
 }
 ```
 
@@ -732,7 +850,10 @@ once. Sorted descending by `basic_test.accuracy`. `average_variables_chosen`
 is the mean size of `variables` across each student's best attempt (`0` if
 nobody has submitted yet). A non-`null` `warning` is visible to the
 professor live — a natural moment to point out, on the spot, why that
-student's number doesn't mean what it looks like it means.
+student's number doesn't mean what it looks like it means. The three
+season lists are this session's fixed config, echoed on every poll (see
+"Season configuration" above) so a dashboard doesn't have to remember what
+it started the session with.
 
 **Errors:** `403` wrong `X-Host-Token`; `404` unknown session.
 
@@ -741,9 +862,11 @@ student's number doesn't mean what it looks like it means.
 ### `POST /sessions/{code}/stop`
 
 End the session. Scores **every attempt from every student** (not just each
-student's best) against the seasons 11+ final hold-out for the first time,
-and returns both leaderboards. Idempotent — calling it again just returns
-the same final results.
+student's best) against this session's `final_test_seasons` for the first
+time, and returns both leaderboards. Idempotent — calling it again just
+returns the same final results. (This response doesn't itself echo the
+season config — a client that needs it here already has it from `/join` or
+`/dashboard`, both polled well before a session is ever stopped.)
 
 **Headers:** `X-Host-Token: <token>`
 

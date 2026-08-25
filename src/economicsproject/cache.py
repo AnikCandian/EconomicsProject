@@ -1,29 +1,37 @@
-"""Process-wide cache of fitted logit models, keyed by the exact set of
+"""Per-session cache of fitted logit models, keyed by the exact set of
 feature-column names used to train them.
 
-Caching is purely in-memory and lives for the lifetime of the running
-server process -- it is intentionally not persisted to disk. See
-API_PROTOCOL.md ("Scope and limitations") for why.
+Scoped to one ``sessions.Session``, not shared process-wide -- a fitted
+model's coefficients depend on the session's ``dataset.SeasonConfig``
+(which seasons it trains on), and different sessions can have different
+season configs (professor-configurable, see CLAUDE.md, "Professor-
+configurable season splits"), so a cache entry from one session's config
+would be silently wrong for another's. Caching is purely in-memory and
+lives for the lifetime of the running server process -- it is
+intentionally not persisted to disk. See API_PROTOCOL.md ("Scope and
+limitations") for why.
 """
 
 from __future__ import annotations
 
 import threading
 
-from .dataset import PreparedDataset
+from .dataset import PreparedDataset, SeasonConfig, default_season_config
 from .modeling import FittedModel, fit_logit_model
 
 
 class ModelCache:
-    """Fits each distinct set of logical variables at most once per process.
+    """Fits each distinct set of logical variables at most once, under one
+    fixed season config.
 
     Fits for the *same* key are serialized (see ``get_or_fit``); fits for
     *different* keys still run fully in parallel, so one slow fit never
     blocks unrelated ones.
     """
 
-    def __init__(self, dataset: PreparedDataset):
+    def __init__(self, dataset: PreparedDataset, season_config: SeasonConfig | None = None):
         self._dataset = dataset
+        self._season_config = season_config or default_season_config(dataset.available_seasons)
         self._cache_lock = threading.Lock()  # protects _cache and _key_locks themselves
         self._cache: dict[tuple[str, ...], FittedModel] = {}
         self._key_locks: dict[tuple[str, ...], threading.Lock] = {}
@@ -69,7 +77,7 @@ class ModelCache:
                 cached = self._cache.get(key)
             if cached is not None:
                 return cached
-            fitted = fit_logit_model(list(key), self._dataset)
+            fitted = fit_logit_model(list(key), self._dataset, self._season_config)
             with self._cache_lock:
                 self._cache[key] = fitted
             return fitted

@@ -44,6 +44,9 @@ document.getElementById("join-btn").addEventListener("click", async () => {
     localStorage.setItem("dealGame.categories", JSON.stringify(data.categories));
     localStorage.setItem("dealGame.dummyColumnCategory", JSON.stringify(data.dummy_column_category));
     localStorage.setItem("dealGame.maxAttempts", String(data.max_attempts));
+    localStorage.setItem("dealGame.trainSeasons", JSON.stringify(data.train_seasons));
+    localStorage.setItem("dealGame.basicTestSeasons", JSON.stringify(data.basic_test_seasons));
+    localStorage.setItem("dealGame.finalTestSeasons", JSON.stringify(data.final_test_seasons));
 
     window.location.href = "/play";
   } catch (err) {

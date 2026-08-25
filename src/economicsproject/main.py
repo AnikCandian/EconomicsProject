@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from .dataset import load_prepared_dataset
+from .dataset import default_season_config, load_prepared_dataset
 from .modeling import fit_logit_model
 
 
@@ -28,13 +28,18 @@ def run_demo() -> None:
         "Industry_Food and Beverage",
         "Industry_Technology/Software",
     ]
+    # No season_config passed -- fits against dataset.default_season_config(),
+    # the same out-of-the-box split a professor's session gets unless they
+    # customize it (see CLAUDE.md, "Professor-configurable season splits").
     fitted = fit_logit_model(example_columns, dataset)
+    default = default_season_config(dataset.available_seasons)
+    basic_test_seasons = ", ".join(str(s) for s in sorted(default.basic_test_seasons))
 
     print("EconomicsProject environment is set up and working!")
     print(fitted.equation)
     print(f"Train pseudo R^2: {fitted.train_pseudo_r_squared:.4f}")
     print(
-        "Basic test (seasons 8-10) -- accuracy: "
+        f"Basic test (seasons {basic_test_seasons}) -- accuracy: "
         f"{fitted.basic_test.accuracy:.4f}, "
         f"yes-deal accuracy: {fitted.basic_test.yes_deal_accuracy:.4f}, "
         f"no-deal accuracy: {fitted.basic_test.no_deal_accuracy:.4f}"

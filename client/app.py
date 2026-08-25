@@ -28,12 +28,19 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 
 # Static landing-page copy, verified against the bundled dataset (not an
 # API call -- this client is a separate deployable and doesn't import the
-# backend package). Recompute these if the dataset ever changes:
-#   from economicsproject.dataset import load_prepared_dataset, USABLE_COLUMNS, TARGET_COLUMN
-#   ds = load_prepared_dataset(); train, _, _ = ds.split_by_season()
+# backend package). TRAIN_BASE_RATE illustrates the *default* season split
+# (professors can pick a different one per session -- see GET /seasons /
+# POST /sessions in API_PROTOCOL.md, "Season configuration"); it's just
+# example copy on the landing page, not tied to any live session. Recompute
+# both if the dataset or the default split ever changes:
+#   from economicsproject.dataset import (
+#       load_prepared_dataset, USABLE_COLUMNS, TARGET_COLUMN, default_season_config,
+#   )
+#   ds = load_prepared_dataset()
+#   train, _, _ = ds.split_by_season(default_season_config(ds.available_seasons))
 #   len(USABLE_COLUMNS), round(train[TARGET_COLUMN].mean() * 100, 1)
 USABLE_COLUMN_COUNT = 31
-TRAIN_BASE_RATE = 52.0
+TRAIN_BASE_RATE = 56.4
 
 
 @app.context_processor

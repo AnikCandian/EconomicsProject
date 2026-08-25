@@ -135,10 +135,13 @@ rather than faked:
   checkbox change via `POST /explore` — see "Attempts, not live exploring"
   below for why that was deliberately removed.)
 - **Admin-configurable training seasons.** The mockup lets an admin toggle
-  which seasons train the model at runtime. The backend has a fixed split
-  (seasons 1–7 train, 8–10 basic test, 11+ held out) with no such endpoint,
-  so that control became a real, static readout instead of a decorative one
-  that did nothing.
+  which seasons train the model at runtime. This is no longer a gap — the
+  backend now genuinely supports it (`GET /seasons`, `POST /sessions`'s
+  optional body; see `API_PROTOCOL.md`, "Season configuration"), and the
+  pre-session screen here renders it as a real checkbox matrix (one row per
+  season, independent Train/Basic test/Final test checkboxes), not a
+  decorative dropdown. Fixed for the session once started, same as every
+  other per-session value.
 - **"Historical" tab / 30-day trend chart.** Assumed persisted history
   across many past sessions; the backend is explicitly single-session,
   in-memory, no persistence (see `API_PROTOCOL.md`, "Scope and

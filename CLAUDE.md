@@ -337,6 +337,73 @@ and stops immediately instead of entering the poll loop at all. This is
 the general fix — it protects against *any* future definitive `/finalize`
 rejection working this way, not just these two specific causes.
 
+## Significant design decision: Professor-configurable season splits
+
+Originally every model was trained on a hardcoded seasons 1-7, basic-tested
+on 8-10, and final-tested on 11+ — three module-level constants in
+`dataset.py`. That's gone. A professor now picks all three season sets
+themselves, per session, via an optional `POST /sessions` body; the split
+is fixed for that session's whole lifetime once chosen, same as
+`host_token`. See `API_PROTOCOL.md`, "Season configuration," for the full
+endpoint contract.
+
+**The data model is three independent season sets, not a cutoff.** The
+original ask was for three dropdowns (a cutoff-range picker); the actual
+shipped design is one table with three checkboxes per season instead,
+because a professor should be able to pick and choose *which* seasons go
+into training, not just where a range starts and ends. This is captured as
+`dataset.SeasonConfig` — `train_seasons` / `basic_test_seasons` /
+`final_test_seasons`, each a `frozenset[int]`, with no requirement that
+they be contiguous, non-overlapping, or partition the dataset. The only
+validation (`dataset.validate_season_config()`) is that each set is
+non-empty and every season number in it actually exists in the dataset.
+
+**Overlap is not just allowed, it's the default.** `dataset
+.default_season_config()` — the out-of-the-box split before a professor
+changes anything — sets `train_seasons == basic_test_seasons` (currently
+seasons 1-10, both), with `final_test_seasons` being whatever's left
+(currently 11-17). Training and basic-testing on the *identical* seasons is
+deliberate: it's almost pushing for an overfit on purpose, so the "live"
+accuracy number students chase while playing is optimistic by
+construction, and genuine out-of-sample performance is deferred entirely
+to the final test nobody can see until the professor stops the session.
+A single-cutoff-per-dropdown design literally cannot express this default
+(a train range and a basic-test range covering the exact same seasons
+isn't a "cutoff" relationship at all), which is part of why the checkbox
+matrix was the right call even before considering flexibility for its own
+sake.
+
+**Consequence: per-session model caching, not one shared cache.** Before
+this change, `ModelCache` was a single instance shared by every session on
+the process, keyed only by variable set — safe, because every session
+trained on the same fixed seasons, so identical variables always meant an
+identical fit. That invariant breaks once sessions can have different
+season configs: the same variable set fit on seasons 1-10 is a genuinely
+different model than the same variables fit on seasons 1-7. Fixed:
+`SessionStore.create()` now builds a fresh `ModelCache` per session,
+constructed against that session's resolved `SeasonConfig`, and
+`Session.__init__` takes `season_config` as a required argument (stored as
+a plain public attribute, `session.season_config` — immutable by
+convention/no-setter-endpoint, matching `session.code` and
+`session.host_token`, not runtime-enforced). There is deliberately no
+"change the season config" endpoint on an existing session, so this
+attribute never needs to change after `Session.__init__`.
+
+**The client UI: one table, one row per season, three checkboxes per row.**
+Both shipped clients render this the same way — `GET /seasons` (public, no
+auth) supplies `available_seasons` and the three default lists before any
+session exists, so the picker can be fully populated and pre-checked to
+the default before the professor touches anything; a "Reset to default"
+control re-applies those same three lists without a round trip. The season
+config a session actually ends up with is echoed back from `POST
+/sessions`, `POST /sessions/{code}/join`, and `GET /sessions/{code}
+/dashboard` alike, so neither the professor's nor a student's client ever
+has to hardcode "seasons 8-10" in a label — every season-range label on
+both clients (`client/`'s dashboard chips, final-leaderboard headings, and
+the student model-builder's footer/rail labels; `client_barebones/`'s
+plain-text equivalents) is now rendered from whichever config that session
+actually has.
+
 ## Module responsibilities (keep this modular)
 
 - `dataset.py` — the only place that knows about the raw CSV,
@@ -346,23 +413,30 @@ rejection working this way, not just these two specific causes.
   `fully_selected_categories()` (detects a fully-selected one-hot field)
   and `one_hot_collinearity_message()` (the short, student-facing
   rejection text) — both pure, column-name-only functions, no fitting
-  involved.
-- `modeling.py` — pure functions: fit a logit model on seasons 1-7, score
-  any fitted model's coefficients against any slice of data. No knowledge of
+  involved. Also owns `SeasonConfig`, `default_season_config()`, and
+  `validate_season_config()` — see "Professor-configurable season splits"
+  above.
+- `modeling.py` — pure functions: fit a logit model on a given
+  `SeasonConfig` (or the default split, if none is passed), score any
+  fitted model's coefficients against any slice of data. No knowledge of
   sessions, caching, or HTTP. **This is the module to import directly if you
   just want to try a variable combination from a plain script** — see
   "Running a model standalone" below.
 - `cache.py` — `ModelCache`, keyed by the exact (order-independent) set of
-  variables. One fit per distinct variable set per process, shared across
-  all game sessions.
-- `sessions.py` — in-memory game state: join codes, students, the 3-attempt
-  submission semantics (`MAX_ATTEMPTS`, `Session.finalize()`,
-  `Session.attempts_for()`, `Session.best_attempt_for()`), rejected
-  (full-category, one-hot collinearity) selections (`InvalidSelection`,
-  `Session.invalid_selection_for()`), collapsing an accidental duplicate
-  attempt from a client's retry logic (`Session.collapse_duplicate_attempt()`),
-  the professor's dashboard snapshot, and closing a session (the only place
-  `modeling.score_final_test` gets called, for every attempt).
+  variables, scoped to a single `SeasonConfig` given at construction. One
+  fit per distinct variable set per cache instance. **Per-session, not
+  process-wide** — see "Professor-configurable season splits" above for why
+  that changed.
+- `sessions.py` — in-memory game state: join codes, students, each
+  session's `SeasonConfig` (`Session.season_config`, fixed at creation —
+  see above), the 3-attempt submission semantics (`MAX_ATTEMPTS`,
+  `Session.finalize()`, `Session.attempts_for()`, `Session.best_attempt_for()`),
+  rejected (full-category, one-hot collinearity) selections
+  (`InvalidSelection`, `Session.invalid_selection_for()`), collapsing an
+  accidental duplicate attempt from a client's retry logic
+  (`Session.collapse_duplicate_attempt()`), the professor's dashboard
+  snapshot, and closing a session (the only place `modeling.score_final_test`
+  gets called, for every attempt).
 - `schemas.py` / `server.py` — the FastAPI HTTP layer. Should stay thin; if
   you're writing real logic here instead of in the modules above, it
   probably belongs in one of them instead.
@@ -381,7 +455,16 @@ fitted = fit_logit_model(
     dataset,
 )
 print(fitted.equation)
-print(fitted.basic_test)  # seasons 8-10 only; final test (11+) is deliberately not exposed here
+print(fitted.basic_test)  # default split's basic-test seasons; final test is deliberately not exposed here
+
+# Or against a specific season config instead of the default:
+from economicsproject.dataset import SeasonConfig
+custom = SeasonConfig(
+    train_seasons=frozenset(range(1, 8)),
+    basic_test_seasons=frozenset(range(8, 11)),
+    final_test_seasons=frozenset(range(11, 18)),
+)
+fitted = fit_logit_model(["Original Ask Amount"], dataset, custom)
 ```
 
 This is exactly what `cache.ModelCache.get_or_fit()` and the API do under
@@ -406,6 +489,23 @@ collapsed round trip was verified with a real Playwright run against
 actually running servers, not just these unit tests -- an out-of-band
 request was used to simulate the specific race (client sees the original
 POST fail fast, but its bytes still reach the server well after 3 polls).
+
+Season configuration is covered at every layer: `tests/test_dataset.py`
+(`default_season_config()`'s deliberate train/basic-test overlap,
+`split_by_season()` against a custom config, `validate_season_config()`'s
+empty/unknown-season rejections), `tests/test_modeling.py` and
+`tests/test_cache.py` (`fit_logit_model()` / `ModelCache` given an explicit
+`SeasonConfig`), `tests/test_sessions.py` (`SessionStore.create()` with no
+config, a custom one, and an invalid one; two sessions with different
+configs producing genuinely different `basic_test.sample_size` for the
+identical variable selection), and `tests/test_server.py` (`GET /seasons`,
+`POST /sessions` with no body / a custom body / an invalid one, and the
+season config echoed identically from `/join` and `/dashboard`). The
+checkbox-matrix UI in both clients (picker defaults, a custom non-default
+split submitted end-to-end, and every season-range label on both the
+professor and student pages rendering from the real session config) was
+verified with real Playwright runs against actually running servers, same
+as the duplicate-collapse flow above -- not just the unit tests.
 
 ## Known simplifications
 
