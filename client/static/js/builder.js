@@ -20,6 +20,9 @@ const studentToken = localStorage.getItem("dealGame.studentToken");
 const usableColumns = JSON.parse(localStorage.getItem("dealGame.usableColumns") || "[]");
 const categories = JSON.parse(localStorage.getItem("dealGame.categories") || "{}");
 const dummyColumnCategory = JSON.parse(localStorage.getItem("dealGame.dummyColumnCategory") || "{}");
+const trainSeasons = JSON.parse(localStorage.getItem("dealGame.trainSeasons") || "[]");
+const basicTestSeasons = JSON.parse(localStorage.getItem("dealGame.basicTestSeasons") || "[]");
+const finalTestSeasons = JSON.parse(localStorage.getItem("dealGame.finalTestSeasons") || "[]");
 
 if (!sessionCode || !studentToken) {
   window.location.href = "/";
@@ -36,6 +39,42 @@ document.getElementById("leave-btn").addEventListener("click", () => {
 
 function initialsOf(name) {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).slice(0, 2).join("");
+}
+
+// Mirrors monitor.js's helper of the same name -- the season split is now
+// professor-configurable per session (see API_PROTOCOL.md, "Season
+// configuration"), so every "seasons 8-10"-style label on this page is
+// rendered from what /join actually returned instead of hardcoded.
+function formatSeasonRanges(seasons) {
+  if (!seasons || seasons.length === 0) return "none";
+  const sorted = [...seasons].sort((a, b) => a - b);
+  const ranges = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur === prev + 1) {
+      prev = cur;
+      continue;
+    }
+    ranges.push(start === prev ? `${start}` : `${start}–${prev}`);
+    if (i < sorted.length) {
+      start = prev = cur;
+    }
+  }
+  return ranges.join(", ");
+}
+
+function renderSeasonLabels() {
+  const basic = formatSeasonRanges(basicTestSeasons);
+  const train = formatSeasonRanges(trainSeasons);
+  const final = formatSeasonRanges(finalTestSeasons);
+  document.getElementById("equation-caption").textContent =
+    `Recall by actual outcome, seasons ${basic} (basic test) — no live preview; submit to see a result.`;
+  document.getElementById("footer-train-seasons").textContent = `Seasons ${train} · set by the professor`;
+  document.getElementById("footer-season-note").textContent =
+    `Seasons ${basic} score you on submission; seasons ${final} stay hidden until the professor stops the session`;
+  document.getElementById("rail-basic-test-eyebrow").textContent = `Basic-test accuracy · seasons ${basic}`;
 }
 
 let maxAttempts = Number(localStorage.getItem("dealGame.maxAttempts") || "3");
@@ -462,6 +501,7 @@ async function pollStatus() {
 }
 
 renderGroups();
+renderSeasonLabels();
 updateRailCount();
 refreshAttempts().catch((err) => console.error(err)); // restore state on page load/refresh
 const statusHandle = setInterval(pollStatus, 5000);

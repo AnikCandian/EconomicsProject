@@ -20,11 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import schemas
-from .cache import ModelCache
 from .dataset import (
     CATEGORY_VALUES,
     DUMMY_COLUMN_CATEGORY,
     USABLE_COLUMNS,
+    SeasonConfig,
+    default_season_config,
     load_prepared_dataset,
     validate_variable_selection,
 )
@@ -33,6 +34,7 @@ from .sessions import (
     MAX_ATTEMPTS,
     InvalidHostTokenError,
     InvalidSelection,
+    Session,
     SessionClosedError,
     SessionNotFoundError,
     SessionStore,
@@ -59,8 +61,7 @@ app.add_middleware(
 )
 
 _dataset = load_prepared_dataset()
-_cache = ModelCache(_dataset)
-_store = SessionStore(_cache, _dataset)
+_store = SessionStore(_dataset)
 
 
 # -- error mapping -----------------------------------------------------------
@@ -147,13 +148,61 @@ def _rank_of(submission: Submission | None, leaderboard: list[Submission]) -> in
     return None
 
 
+def _season_config_dict(session: Session) -> dict:
+    return {
+        "train_seasons": sorted(session.season_config.train_seasons),
+        "basic_test_seasons": sorted(session.season_config.basic_test_seasons),
+        "final_test_seasons": sorted(session.season_config.final_test_seasons),
+    }
+
+
+# -- dataset info (public, no auth -- same sensitivity as USABLE_COLUMNS) ----
+
+
+@app.get("/seasons")
+def seasons():
+    """Every season number in the dataset, plus the out-of-the-box split --
+    a professor's client calls this to render the season picker *before*
+    POSTing to /sessions (there's no session yet at that point to carry
+    this info). See API_PROTOCOL.md, "Season configuration.\""""
+    default = default_season_config(_dataset.available_seasons)
+    return {
+        "available_seasons": sorted(_dataset.available_seasons),
+        "default_train_seasons": sorted(default.train_seasons),
+        "default_basic_test_seasons": sorted(default.basic_test_seasons),
+        "default_final_test_seasons": sorted(default.final_test_seasons),
+    }
+
+
 # -- professor: start / stop, dashboard ---------------------------------------
 
 
 @app.post("/sessions", status_code=201, dependencies=[Depends(require_professor_key)])
-def start_session():
-    session = _store.create()
-    return {"session_code": session.code, "host_token": session.host_token}
+def start_session(body: schemas.StartSessionRequest | None = None):
+    """Any of train_seasons/basic_test_seasons/final_test_seasons left out
+    (or the whole body left out) falls back to the default split. Fixed for
+    the session's whole lifetime -- there's no endpoint to change these
+    once a session exists. See API_PROTOCOL.md, "Season configuration.\""""
+    body = body or schemas.StartSessionRequest()
+    default = default_season_config(_dataset.available_seasons)
+    season_config = SeasonConfig(
+        train_seasons=frozenset(body.train_seasons) if body.train_seasons is not None else default.train_seasons,
+        basic_test_seasons=(
+            frozenset(body.basic_test_seasons) if body.basic_test_seasons is not None else default.basic_test_seasons
+        ),
+        final_test_seasons=(
+            frozenset(body.final_test_seasons) if body.final_test_seasons is not None else default.final_test_seasons
+        ),
+    )
+    try:
+        session = _store.create(season_config)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return {
+        "session_code": session.code,
+        "host_token": session.host_token,
+        **_season_config_dict(session),
+    }
 
 
 @app.get("/sessions/{code}/dashboard")
@@ -167,6 +216,7 @@ def dashboard(code: str, x_host_token: str = Header(...)):
         "students_finalized": snap["students_finalized"],
         "average_variables_chosen": snap["average_variables_chosen"],
         "leaderboard": [_submission_dict(sub) for sub in snap["leaderboard"]],
+        **_season_config_dict(session),
     }
 
 
@@ -198,6 +248,7 @@ def join_session(code: str, body: schemas.JoinRequest):
         "categories": CATEGORY_VALUES,
         "dummy_column_category": DUMMY_COLUMN_CATEGORY,
         "max_attempts": MAX_ATTEMPTS,
+        **_season_config_dict(session),
     }
 
 

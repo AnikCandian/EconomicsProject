@@ -1,10 +1,12 @@
 """Fit and score logit models for the deal-likelihood game.
 
 Every model predicts ``Got Deal`` from a chosen set of feature columns,
-trained only on seasons 1-7 (see ``dataset.TRAIN_SEASONS``). Scoring against
-other season ranges -- the seasons 8-10 "basic test" and the seasons 11+
-"final test" -- is a separate, cheap step that reuses the fitted
-coefficients rather than refitting, so a model only ever gets trained once.
+trained on whichever seasons the game session's ``SeasonConfig`` says to
+train on (professor-configurable, see ``dataset.SeasonConfig`` and
+``dataset.default_season_config`` for the out-of-the-box split). Scoring
+against the basic-test and final-test season sets is a separate, cheap
+step that reuses the fitted coefficients rather than refitting, so a model
+only ever gets trained once per (variable set, season config) pair.
 """
 
 from __future__ import annotations
@@ -15,7 +17,14 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from .dataset import PreparedDataset, TARGET_COLUMN, fully_selected_categories, validate_variable_selection
+from .dataset import (
+    PreparedDataset,
+    SeasonConfig,
+    TARGET_COLUMN,
+    default_season_config,
+    fully_selected_categories,
+    validate_variable_selection,
+)
 
 
 class ModelFitError(ValueError):
@@ -44,18 +53,26 @@ class FittedModel:
     equation: str
     train_pseudo_r_squared: float
     train_means: dict[str, float]  # for imputing missing values on any other split
-    basic_test: ConfusionMetrics  # seasons 8-10, computed once at fit time
+    basic_test: ConfusionMetrics  # scored against the session's basic-test seasons, computed once at fit time
     warning: str | None = None  # set when the fit is numerically degenerate -- see below
 
 
-def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> FittedModel:
-    """Fit a logit regression on seasons 1-7 and score it against seasons 8-10.
+def fit_logit_model(
+    feature_columns: list[str], dataset: PreparedDataset, season_config: SeasonConfig | None = None
+) -> FittedModel:
+    """Fit a logit regression on the configured train seasons and score it
+    against the configured basic-test seasons.
 
     ``feature_columns`` must be real column names in ``dataset.frame`` --
     every one-hot category is individually selectable (e.g.
     "Industry_Travel"), there's no "logical name expands to N dummies" step.
     This validates them itself (via ``dataset.validate_variable_selection``),
     so this guard holds even when called directly, outside the API.
+
+    ``season_config`` defaults to ``dataset.default_season_config()`` (train
+    on seasons 1-10, basic-test on the same seasons 1-10, final-test on
+    whatever's left) if not given -- see CLAUDE.md, "Professor-configurable
+    season splits."
 
     Selecting every category of the same one-hot field at once (e.g. all 16
     Industry values) is allowed, on purpose: it's a genuinely instructive
@@ -65,7 +82,8 @@ def fit_logit_model(feature_columns: list[str], dataset: PreparedDataset) -> Fit
     ``describe_collinearity`` for the reasoning.
     """
     validate_variable_selection(feature_columns)
-    train_df, basic_test_df, _ = dataset.split_by_season()
+    season_config = season_config or default_season_config(dataset.available_seasons)
+    train_df, basic_test_df, _ = dataset.split_by_season(season_config)
 
     train_means = train_df[feature_columns].mean().to_dict()
     train_df = train_df.fillna(train_means)
@@ -157,14 +175,19 @@ def describe_collinearity(feature_columns: list[str], X: pd.DataFrame) -> str | 
     )
 
 
-def score_final_test(fitted: FittedModel, dataset: PreparedDataset) -> ConfusionMetrics:
-    """Score an already-fitted model against the untouched seasons 11+ data.
+def score_final_test(
+    fitted: FittedModel, dataset: PreparedDataset, season_config: SeasonConfig | None = None
+) -> ConfusionMetrics:
+    """Score an already-fitted model against the configured final-test seasons.
 
     Deliberately kept separate from ``fit_logit_model``: call this only once
     a game session ends, so the final hold-out stays unseen while students
-    are still exploring.
+    are still exploring. ``season_config`` must be the same one the model
+    was fit under (defaults to ``dataset.default_season_config()`` if not
+    given, matching ``fit_logit_model``'s own default).
     """
-    _, _, final_test_df = dataset.split_by_season()
+    season_config = season_config or default_season_config(dataset.available_seasons)
+    _, _, final_test_df = dataset.split_by_season(season_config)
     return score(fitted.coefficients, fitted.feature_columns, fitted.train_means, final_test_df)
 
 

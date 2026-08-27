@@ -25,7 +25,15 @@ import time
 from dataclasses import dataclass, field
 
 from .cache import ModelCache
-from .dataset import PreparedDataset, fully_selected_categories, one_hot_collinearity_message, validate_variable_selection
+from .dataset import (
+    PreparedDataset,
+    SeasonConfig,
+    default_season_config,
+    fully_selected_categories,
+    one_hot_collinearity_message,
+    validate_season_config,
+    validate_variable_selection,
+)
 from .modeling import ConfusionMetrics, score_final_test
 
 SESSION_CODE_LENGTH = 6
@@ -110,13 +118,24 @@ class FinalResults:
 
 
 class Session:
-    def __init__(self, code: str, host_token: str, cache: ModelCache, dataset: PreparedDataset):
+    def __init__(
+        self,
+        code: str,
+        host_token: str,
+        cache: ModelCache,
+        dataset: PreparedDataset,
+        season_config: SeasonConfig,
+    ):
         self.code = code
         self.host_token = host_token
         self.status = "open"  # "open" | "closed"
         self.created_at = time.time()
         self.closed_at: float | None = None
         self.final_results: FinalResults | None = None
+        # Fixed for the session's whole lifetime -- set once at creation
+        # (professor-configurable via SessionStore.create()), never changed
+        # after. See CLAUDE.md, "Professor-configurable season splits."
+        self.season_config = season_config
         self._cache = cache
         self._dataset = dataset
         self._lock = threading.RLock()
@@ -295,7 +314,7 @@ class Session:
 
     def close(self) -> FinalResults:
         """End the session and score *every* attempt (not just each
-        student's best) against the seasons 11+ final hold-out for the
+        student's best) against this session's final_test_seasons for the
         first time. Idempotent."""
         with self._lock:
             if self.final_results is not None:
@@ -306,7 +325,7 @@ class Session:
 
         for submission in all_attempts:
             fitted = self._cache.get_or_fit(submission.variables)
-            submission.final_test = score_final_test(fitted, self._dataset)
+            submission.final_test = score_final_test(fitted, self._dataset, self.season_config)
 
         with self._lock:
             best = [
@@ -330,16 +349,30 @@ class Session:
 class SessionStore:
     """Creates sessions and looks them up by their join code."""
 
-    def __init__(self, cache: ModelCache, dataset: PreparedDataset):
-        self._cache = cache
+    def __init__(self, dataset: PreparedDataset):
         self._dataset = dataset
         self._lock = threading.Lock()
         self._sessions: dict[str, Session] = {}
 
-    def create(self) -> Session:
+    def create(self, season_config: SeasonConfig | None = None) -> Session:
+        """Start a new session. ``season_config`` is professor-supplied
+        (defaults to ``dataset.default_season_config()`` if not given) and
+        fixed for the session's whole lifetime -- see CLAUDE.md,
+        "Professor-configurable season splits." Raises ValueError if it
+        names an empty or unknown season (via ``dataset
+        .validate_season_config``).
+
+        Each session gets its own ``ModelCache``, not a shared one -- a
+        fitted model's coefficients depend on the season config it was
+        trained under, so sessions with different configs can't safely
+        share fits (see ``cache.ModelCache``).
+        """
+        season_config = season_config or default_season_config(self._dataset.available_seasons)
+        validate_season_config(season_config, self._dataset.available_seasons)
+        cache = ModelCache(self._dataset, season_config)
         with self._lock:
             code = self._unique_code()
-            session = Session(code, secrets.token_urlsafe(24), self._cache, self._dataset)
+            session = Session(code, secrets.token_urlsafe(24), cache, self._dataset, season_config)
             self._sessions[code] = session
             return session
 

@@ -45,11 +45,11 @@ def test_get_or_fit_never_fits_the_same_key_twice_concurrently(monkeypatch):
     call_count = {"n": 0}
     count_lock = threading.Lock()
 
-    def slow_fit(feature_columns, ds):
+    def slow_fit(feature_columns, ds, season_config):
         with count_lock:
             call_count["n"] += 1
         threading.Event().wait(0.2)  # widen the race window
-        return real_fit_logit_model(feature_columns, ds)
+        return real_fit_logit_model(feature_columns, ds, season_config)
 
     monkeypatch.setattr(cache_module, "fit_logit_model", slow_fit)
 
@@ -86,9 +86,9 @@ def test_get_or_fit_does_not_serialize_unrelated_keys(monkeypatch):
     barrier = threading.Barrier(2, timeout=5)
     errors = []
 
-    def synchronized_fit(feature_columns, ds):
+    def synchronized_fit(feature_columns, ds, season_config):
         barrier.wait()
-        return real_fit_logit_model(feature_columns, ds)
+        return real_fit_logit_model(feature_columns, ds, season_config)
 
     monkeypatch.setattr(cache_module, "fit_logit_model", synchronized_fit)
 

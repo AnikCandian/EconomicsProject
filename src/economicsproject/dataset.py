@@ -23,23 +23,20 @@ PREPARED_DATA_PATH = Path(__file__).parent / "prepared_shark_tank_dataset.csv"
 SEASON_COLUMN = "Season Number"
 TARGET_COLUMN = "Got Deal"
 
-# Seasons 1-7 train every model. Seasons 8-10 are the "basic test" shown to
-# students live while they explore. Everything after that (11+) is a final
-# hold-out, only ever scored once a game session ends -- see modeling.py.
-TRAIN_SEASONS = set(range(1, 8))
-BASIC_TEST_SEASONS = set(range(8, 11))
-
 # Plain numeric columns students can pick as variables. "Guest Present" is
-# deliberately NOT here: it only starts being recorded in season 15 (part
-# of the final hold-out, seasons 11+) -- it has zero non-null values in
-# both the training seasons (1-7) and the basic-test seasons (8-10),
-# verified against the raw CSV, so its training mean is NaN and
+# deliberately NOT here: it only starts being recorded in season 15, so it
+# had zero non-null values in both the training and basic-test seasons
+# under the fixed split this project used before season configuration
+# became professor-adjustable (seasons 1-7 and 8-10 respectively, verified
+# against the raw CSV), so its training mean is NaN and
 # fit_logit_model()'s mean-imputation is a no-op, leaving the whole column
 # NaN and guaranteeing statsmodels.tools.sm_exceptions.MissingDataError on
 # *any* selection that includes it, alone or combined with anything else.
 # Unlike a degenerate (collinear) selection, this isn't a teachable
-# moment -- it's just a column with no usable training-period data, so it's
-# excluded from the menu entirely rather than offered and left to crash.
+# moment -- it's just a column with essentially no usable pre-season-15
+# data, so it's excluded from the menu entirely (regardless of which
+# seasons a professor now picks for a given session) rather than offered
+# and left to crash on whichever splits happen to include season 15+.
 NUMERIC_USABLE_COLUMNS = [
     "Episode Number",
     "Pitch Number",
@@ -193,19 +190,72 @@ def one_hot_encode_categories(df: pd.DataFrame, category_values: dict[str, list[
 
 
 @dataclass(frozen=True)
+class SeasonConfig:
+    """Which seasons a game session trains on, basic-tests live, and finally
+    tests against once it ends. Professor-configurable per session (see
+    ``sessions.SessionStore.create``) before the session starts, fixed for
+    its whole lifetime after that.
+
+    The three sets are independent and may overlap on purpose -- see
+    ``default_season_config`` below for why the *default* deliberately
+    makes train and basic-test the exact same seasons. Nothing here
+    enforces final-test staying disjoint from the other two either: this
+    is a professor-only control, and demonstrating what happens when a
+    "hold-out" isn't one is itself a legitimate use of it.
+    """
+
+    train_seasons: frozenset[int]
+    basic_test_seasons: frozenset[int]
+    final_test_seasons: frozenset[int]
+
+
+def default_season_config(available_seasons: frozenset[int]) -> SeasonConfig:
+    """The out-of-the-box split, before a professor customizes anything:
+    Train = seasons 1-10, Basic Test = the SAME seasons 1-10 (deliberately
+    -- scoring "live" accuracy on the training data itself is almost
+    pushing for an overfit, so the basic-test number students see while
+    playing is optimistic on purpose, and the eventual final test is where
+    genuine out-of-sample performance shows up), Final Test = every
+    remaining season (currently 11-17, the remaining 7). See CLAUDE.md,
+    "Professor-configurable season splits," for the full reasoning.
+    """
+    train = frozenset(season for season in available_seasons if season <= 10)
+    return SeasonConfig(
+        train_seasons=train,
+        basic_test_seasons=train,
+        final_test_seasons=frozenset(available_seasons - train),
+    )
+
+
+def validate_season_config(season_config: SeasonConfig, available_seasons: frozenset[int]) -> None:
+    """Raise ValueError if any of the three season sets is empty or names a
+    season the dataset doesn't actually have."""
+    for name, seasons in (
+        ("train_seasons", season_config.train_seasons),
+        ("basic_test_seasons", season_config.basic_test_seasons),
+        ("final_test_seasons", season_config.final_test_seasons),
+    ):
+        if not seasons:
+            raise ValueError(f"{name} must include at least one season")
+        unknown = sorted(seasons - available_seasons)
+        if unknown:
+            raise ValueError(f"{name} has unknown season(s): {unknown}")
+
+
+@dataclass(frozen=True)
 class PreparedDataset:
     """The Shark Tank data, ready to model with: usable columns only, categories
     already one-hot encoded into individually-selectable columns."""
 
     frame: pd.DataFrame
     feature_columns: list[str]
-    final_test_seasons: frozenset[int]
+    available_seasons: frozenset[int]
 
-    def split_by_season(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def split_by_season(self, season_config: SeasonConfig) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Return (train, basic_test, final_test) DataFrames split by season."""
-        train = self.frame[self.frame[SEASON_COLUMN].isin(TRAIN_SEASONS)]
-        basic_test = self.frame[self.frame[SEASON_COLUMN].isin(BASIC_TEST_SEASONS)]
-        final_test = self.frame[self.frame[SEASON_COLUMN].isin(self.final_test_seasons)]
+        train = self.frame[self.frame[SEASON_COLUMN].isin(season_config.train_seasons)]
+        basic_test = self.frame[self.frame[SEASON_COLUMN].isin(season_config.basic_test_seasons)]
+        final_test = self.frame[self.frame[SEASON_COLUMN].isin(season_config.final_test_seasons)]
         return train, basic_test, final_test
 
 
@@ -250,10 +300,10 @@ def load_prepared_dataset(
     frame = pd.read_csv(prepared_csv_path)
 
     feature_columns = [c for c in USABLE_COLUMNS if c in frame.columns]
-    final_test_seasons = frozenset(frame[SEASON_COLUMN].unique()) - TRAIN_SEASONS - BASIC_TEST_SEASONS
+    available_seasons = frozenset(int(season) for season in frame[SEASON_COLUMN].unique())
 
     return PreparedDataset(
         frame=frame,
         feature_columns=feature_columns,
-        final_test_seasons=final_test_seasons,
+        available_seasons=available_seasons,
     )

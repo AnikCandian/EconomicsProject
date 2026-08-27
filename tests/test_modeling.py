@@ -1,7 +1,7 @@
 import pytest
 import statsmodels.api as sm
 
-from economicsproject.dataset import CATEGORY_VALUES, load_prepared_dataset
+from economicsproject.dataset import CATEGORY_VALUES, default_season_config, load_prepared_dataset
 from economicsproject.modeling import ModelFitError, describe_collinearity, fit_logit_model, score_final_test
 
 
@@ -34,7 +34,8 @@ def test_fit_logit_model_allows_but_warns_on_a_full_category_selection():
 
 def test_describe_collinearity_is_none_for_a_well_posed_design_matrix():
     dataset = load_prepared_dataset()
-    train_df, _, _ = dataset.split_by_season()
+    season_config = default_season_config(dataset.available_seasons)
+    train_df, _, _ = dataset.split_by_season(season_config)
     columns = ["Original Ask Amount", "Industry_Travel"]
     X = sm.add_constant(train_df[columns], has_constant="add")
 
@@ -75,9 +76,10 @@ def test_guest_present_is_not_a_usable_column():
 
 def test_score_final_test_uses_only_the_reserved_seasons():
     dataset = load_prepared_dataset()
-    fitted = fit_logit_model(["Original Ask Amount"], dataset)
+    season_config = default_season_config(dataset.available_seasons)
+    fitted = fit_logit_model(["Original Ask Amount"], dataset, season_config)
 
-    final_metrics = score_final_test(fitted, dataset)
+    final_metrics = score_final_test(fitted, dataset, season_config)
 
-    assert final_metrics.sample_size == len(dataset.split_by_season()[2])
+    assert final_metrics.sample_size == len(dataset.split_by_season(season_config)[2])
     assert 0 <= final_metrics.accuracy <= 1

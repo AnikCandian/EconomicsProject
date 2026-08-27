@@ -31,6 +31,108 @@ def test_start_session_requires_professor_key():
     assert wrong_key.status_code == 401
 
 
+def test_get_seasons_is_public_and_lists_the_default_split():
+    response = client.get("/seasons")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available_seasons"] == list(range(1, 18))
+    assert body["default_train_seasons"] == list(range(1, 11))
+    assert body["default_basic_test_seasons"] == list(range(1, 11))
+    assert body["default_final_test_seasons"] == list(range(11, 18))
+
+
+def test_start_session_with_no_body_uses_the_default_season_config():
+    session = _start_session()
+    assert session["train_seasons"] == list(range(1, 11))
+    assert session["basic_test_seasons"] == list(range(1, 11))
+    assert session["final_test_seasons"] == list(range(11, 18))
+
+
+def test_start_session_accepts_a_custom_season_config():
+    response = client.post(
+        "/sessions",
+        json={
+            "train_seasons": list(range(1, 8)),
+            "basic_test_seasons": list(range(8, 11)),
+            "final_test_seasons": list(range(11, 18)),
+        },
+        headers=PROFESSOR_HEADERS,
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["train_seasons"] == list(range(1, 8))
+    assert body["basic_test_seasons"] == list(range(8, 11))
+    assert body["final_test_seasons"] == list(range(11, 18))
+
+
+def test_start_session_rejects_an_unknown_season():
+    response = client.post(
+        "/sessions", json={"train_seasons": [999]}, headers=PROFESSOR_HEADERS
+    )
+    assert response.status_code == 400
+    assert "unknown season" in response.json()["detail"]
+
+
+def test_start_session_rejects_an_empty_season_list():
+    response = client.post(
+        "/sessions", json={"basic_test_seasons": []}, headers=PROFESSOR_HEADERS
+    )
+    assert response.status_code == 400
+    assert "at least one season" in response.json()["detail"]
+
+
+def test_join_and_dashboard_echo_the_session_season_config():
+    session = _start_session()
+    code = session["session_code"]
+    student = _join(code)
+    assert student["train_seasons"] == session["train_seasons"]
+    assert student["basic_test_seasons"] == session["basic_test_seasons"]
+    assert student["final_test_seasons"] == session["final_test_seasons"]
+
+    dashboard = client.get(f"/sessions/{code}/dashboard", headers={"X-Host-Token": session["host_token"]})
+    assert dashboard.status_code == 200
+    dash_body = dashboard.json()
+    assert dash_body["train_seasons"] == session["train_seasons"]
+    assert dash_body["basic_test_seasons"] == session["basic_test_seasons"]
+    assert dash_body["final_test_seasons"] == session["final_test_seasons"]
+
+
+def test_two_sessions_with_different_season_configs_score_independently():
+    # Regression test for per-session model caching: a shared, process-wide
+    # cache would silently reuse one session's fit for another session with
+    # a *different* season config, which is simply wrong -- the training
+    # data differs.
+    default_session = _start_session()
+    custom_session_resp = client.post(
+        "/sessions",
+        json={
+            "train_seasons": list(range(1, 8)),
+            "basic_test_seasons": list(range(8, 11)),
+            "final_test_seasons": list(range(11, 18)),
+        },
+        headers=PROFESSOR_HEADERS,
+    )
+    custom_session = custom_session_resp.json()
+
+    a = _join(default_session["session_code"], "Ada Lovelace")
+    b = _join(custom_session["session_code"], "Grace Hopper")
+
+    resp_a = client.post(
+        f"/sessions/{default_session['session_code']}/finalize",
+        json={"variables": ["Original Ask Amount"]},
+        headers={"X-Student-Token": a["student_token"]},
+    )
+    resp_b = client.post(
+        f"/sessions/{custom_session['session_code']}/finalize",
+        json={"variables": ["Original Ask Amount"]},
+        headers={"X-Student-Token": b["student_token"]},
+    )
+
+    # default session trains and basic-tests on the same (larger) seasons;
+    # the custom session's basic test is a genuinely smaller, disjoint slice
+    assert resp_a.json()["basic_test"]["sample_size"] != resp_b.json()["basic_test"]["sample_size"]
+
+
 def test_full_game_flow_with_three_attempts():
     assert MAX_ATTEMPTS == 3
 
