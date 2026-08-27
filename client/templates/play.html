@@ -15,7 +15,13 @@
   </div>
 </div>
 
-<p id="closed-banner" class="alert" hidden>The professor has ended this session. See your final results below.</p>
+<div id="final-section" hidden style="padding:24px 32px;border-bottom:2px solid var(--color-divider)">
+  <div class="eyebrow">Session results</div>
+  <div class="rail-stat-row"><span>Your basic-test rank</span><span id="final-basic-rank">—</span></div>
+  <div class="rail-stat-row"><span>Your final-test rank</span><span id="final-final-rank">—</span></div>
+</div>
+
+<p id="closed-banner" class="alert" hidden>The professor has ended this session. See your final results above.</p>
 <p id="exhausted-banner" class="alert" hidden>You've used all 3 attempts — read-only from here.</p>
 <p id="pending-banner" class="alert" hidden>Submitted — confirming with the server…</p>
 
@@ -114,12 +120,6 @@
   <summary style="cursor:pointer;font-size:12px;color:var(--color-neutral-600)">Raw response</summary>
   <pre id="result-raw" style="background:var(--color-surface);padding:12px;overflow-x:auto;font-size:11px"></pre>
 </details>
-
-<div id="final-section" hidden style="padding:0 32px 32px">
-  <div class="eyebrow">Session results</div>
-  <div class="rail-stat-row"><span>Your basic-test rank</span><span id="final-basic-rank">—</span></div>
-  <div class="rail-stat-row"><span>Your final-test rank</span><span id="final-final-rank">—</span></div>
-</div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
